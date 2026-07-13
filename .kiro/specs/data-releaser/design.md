@@ -227,6 +227,14 @@ sequenceDiagram
 - **Dynamic callout retained; static authorization deferred.** Per-researcher isolation
   is enforced at the authorization-decision layer (the callout returns only the caller's
   locations), which the current single global static file cannot express.
+- **Shares are immutable; manifests are derived and descriptive.** A share's library set
+  does not change in place — editing a researcher's access is done by revoke + recreate
+  (Req 3.9). The Manifest is a pure projection of active Share_Records: descriptive only,
+  never an access-control surface (enforcement is server-side via the callout), so it can
+  be regenerated or overwritten freely (Req 7.8) and stays convergent (Property 10)
+  without drift. Adding libraries is compositional (a new share; the manifest unions),
+  while removing a subset means revoking and recreating — an accepted tradeoff for the
+  simpler immutable-share model.
 
 ### Caching model
 
@@ -463,7 +471,13 @@ without a redesign.
 Per Req 7. Grouped by library; each file is a ready-to-use htsget request path plus
 optional Access_Rules. `expiresAt` is the effective expiry per library (latest across
 the shares granting it, or `null` if any is unlimited — Req 7.7). One manifest object
-per researcher account.
+per researcher account. The Manifest is **tool-generated and descriptive only** — it
+reflects access but does not grant it. Enforcement is entirely server-side, from
+Share_Records via the authorization callout; the Manifest is never consulted for
+authorization. So modifying the Manifest object has no effect on access (it is not a
+control surface), and the Data_Releaser may overwrite it on any regeneration (Req 7.8).
+A share's library set is immutable — to change a researcher's libraries, revoke and
+recreate (Req 3.9); there is no in-place edit.
 
 ```json
 {

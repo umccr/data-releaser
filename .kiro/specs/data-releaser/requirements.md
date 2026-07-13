@@ -71,6 +71,7 @@ The Data Releaser is a CLI tool that enables UMCCR administrators to share bioin
 6. IF the share identifier references a Share_Record that has already expired, THEN THE Data_Releaser SHALL report an error indicating the share has already expired.
 7. IF the Authorization_Service is unreachable or returns an error during the revocation operation, THEN THE Data_Releaser SHALL report an error indicating the revocation failed and SHALL NOT alter the Share_Record state.
 8. WHERE an administrator requires a revocation to take effect sooner than the Cache_TTL, THE Data_Releaser SHALL attempt a best-effort invalidation of the Authorization_Cache for the affected Researcher_Account, and SHALL communicate that propagation is otherwise bounded by the Cache_TTL.
+9. THE library set of a Share_Record SHALL be immutable. THE Data_Releaser SHALL NOT provide in-place editing of a share's library set; to change which libraries a Researcher_Account can access, the administrator SHALL revoke the affected share and create a new share with the desired set (revoke and recreate).
 
 ### Requirement 4: Htsget-rs Authorization Callout Integration
 
@@ -122,6 +123,7 @@ The Data Releaser is a CLI tool that enables UMCCR administrators to share bioin
 5. THE Manifest SHALL include the htsget-rs base URL so that the researcher can construct valid htsget requests.
 6. THE Manifest SHALL be a valid JSON document with a top-level structure containing the htsget-rs base URL, the manifest generation timestamp (ISO 8601), and a `libraries` array. Each library entry SHALL include the library ID, an effective expiry date (ISO 8601, or null if unlimited), and a `files` array. Each file entry SHALL include the htsget request path (relative to the base URL, encoding the reads or variants endpoint) and an optional `rules` array of Access_Rules; an absent or empty `rules` array SHALL mean unrestricted access to that file.
 7. WHERE a library is granted by more than one active Share_Record for the same Researcher_Account, THE Manifest SHALL express a single effective expiry for that library equal to the latest expiry among those shares, or null if any granting share is unlimited.
+8. THE Manifest SHALL be a tool-generated, descriptive artifact that reflects the access a Researcher_Account has been granted but does not itself grant access. Access SHALL be enforced server-side by the Authorization_Service and Htsget_Rs from the Share_Records alone, and the Manifest SHALL NOT be consulted for any authorization decision. Consequently, modifying the Manifest object SHALL have no effect on access, and the Data_Releaser MAY overwrite it on any regeneration.
 
 ### Requirement 8: List Active Shares
 
