@@ -1,0 +1,26 @@
+# Kiro local settings (may contain MCP API keys / credentials)
+.kiro/settings/mcp.json
+
+# Go build artifacts
+/bin/
+/dist/
+*.exe
+*.out
+*.test
+
+# Dependency / vendor
+/vendor/
+
+# Environment and credentials
+.env
+.env.*
+*.pem
+credentials.json
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
