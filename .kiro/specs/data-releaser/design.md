@@ -5,27 +5,31 @@
 The Data Releaser is a Go CLI tool that lets UMCCR administrators grant external
 researchers time-bounded (or unlimited) access to specific bioinformatics libraries,
 served through htsget-rs over a VPC Lattice private connection. The tool orchestrates
-a workflow that spans four AWS accounts: it resolves `library_id`s to concrete S3
-objects using OrcaBus services (Production account), records the grant in an
-authorization backend it owns (Data Control account), ensures the researcher can
-reach htsget-rs (VPC Lattice / RAM), and publishes a manifest into the researcher's
-account so they know what they can query.
+a workflow that spans several AWS accounts: it resolves `library_id`s to concrete S3
+prefixes by querying the OrcaVault data warehouse (its curated `mart` layer) via Athena
+over a Lake Formation cross-account share, records the grant in an authorization backend
+it owns (Data Control account), ensures the researcher can reach htsget-rs (VPC Lattice /
+RAM), and publishes a manifest into the researcher's account so they know what they can
+query.
 
 The design centers on four decisions established during requirements analysis:
 
 1. **Data Control owns the shares.** The share lifecycle artifacts (Authorization
    Service, DynamoDB, htsget-rs, VPC Lattice, RAM) all live in the Data Control
-   account, so that account owns `Share_Record`s regardless of where the operator
-   authenticates (Req 11.5).
-2. **Source-agnostic, per-need credential brokering.** The tool resolves purpose-scoped
-   credentials for each account independently, from whatever source the operator already
-   uses — named profiles (SSO / IAM Identity Center / `credential_process` providers),
-   assumed role ARNs, or static credentials. Purposes need not share a base
-   identity and no account need trust another; resolution is never chained. The tool
-   creates no roles — provisioning is out of scope and belongs in IaC (Req 11).
-3. **Two-step resolution.** `library_id -> portal_run_id` via the Workflow Manager,
-   then `portal_run_id -> S3 paths` via the Filemanager. The Filemanager cannot be
-   queried by library ID directly (Req 1).
+   account, so that account owns `Share_Record`s (Req 11.4).
+2. **Single Data Control identity.** The tool runs under one authenticated session into
+   the Data Control account, from any standard AWS credential source (SSO profile,
+   `credential_process`, environment, or an assumed role). That identity carries every
+   permission the tool needs: querying the warehouse, managing shares, and writing
+   manifests into researcher buckets (the latter authorized by each researcher's bucket
+   policy). The tool creates no roles — provisioning is out of scope and belongs in IaC
+   (Req 11).
+3. **Single-query warehouse resolution.** The full `library_id -> portal_run_id -> S3
+   path` mapping is resolved by one read-only Athena query against the OrcaVault Mart
+   (`mart.lims` to validate existence, `mart.bam` for read files, `mart.output` for the
+   grant prefix), consumed through a Lake Formation share in the Data Control account.
+   This replaces the previous two-hop OrcaBus API resolution and removes the dependency
+   on the Workflow Manager, Filemanager, and the OrcaBus JWT (Req 1).
 4. **Dynamic authorization with bounded caching.** htsget-rs calls the Authorization
    Service at request time, but reuses decisions through two cache layers to avoid a
    callout per request. Expiry is made precise via `max-age`; revocation is bounded by
@@ -44,17 +48,17 @@ Boundaries are AWS accounts; edges are the trust and data flows between componen
 ```mermaid
 flowchart LR
     subgraph OPS["Operator"]
-        ADMIN["Administrator<br/>(SSO / profiles)"]
-        CLI["Data_Releaser CLI<br/>+ Credential_Broker"]
+        ADMIN["Administrator<br/>(SSO into Data Control)"]
+        CLI["Data_Releaser CLI"]
     end
 
-    subgraph PROD["Production / OrcaBus Account (472057503814)"]
-        WFM["Workflow_Manager<br/>library_id → portal_run_id"]
-        FM["Filemanager<br/>portalRunId → S3 paths"]
-        SECRET["Secrets Manager<br/>orcabus/token-service-jwt"]
+    subgraph WH["Warehouse Account (115253169271)"]
+        OV[("OrcaVault Mart<br/>mart.lims / mart.bam / mart.output")]
+        LF{{"Lake Formation<br/>cross-account share (RAM)"}}
     end
 
     subgraph DC["Data Control Account (916218008751)"]
+        ATHENA["Athena<br/>(mart resource-link DB)"]
         APIGW["API Gateway<br/>(response cache - Layer 1)"]
         AUTH["Authorization_Service<br/>(Lambda)"]
         DDB[("DynamoDB<br/>Share_Records")]
@@ -75,13 +79,15 @@ flowchart LR
     ADMIN --> CLI
 
     %% CLI credential-scoped flows (per-need role assumption)
-    CLI -->|"read metadata (JWT)"| WFM
-    CLI -->|"read metadata (JWT)"| FM
-    CLI -->|"read token"| SECRET
+    CLI -->|"resolve libraries: Athena query"| ATHENA
     CLI -->|"write/manage Share_Records"| APIGW
     CLI -->|"manage RAM / lattice assoc."| LATTICE
     CLI -->|"write Manifest"| S3MAN
     CLI -.->|"validate: invoke probe (Req 15)"| TESTL
+
+    %% Warehouse resolution path (Lake Formation share)
+    ATHENA -->|"SELECT via resource-link"| LF
+    LF --> OV
 
     %% Authorization data path
     APIGW --> AUTH
@@ -93,9 +99,6 @@ flowchart LR
     HTS -->|"auth callout (on cache miss)"| APIGW
     HTS -->|"cross-account GetObject"| S3DATA
     TESTL -->|"in-VPC htsget request"| LATTICE
-
-    %% Annotation link (event-driven, not part of a share request)
-    FM -.->|"tagged by FMAnnotator<br/>(WorkflowRunStateChange events)"| WFM
 ```
 
 ### Key flow: share creation
@@ -109,45 +112,36 @@ sequenceDiagram
     autonumber
     actor Admin
     participant CLI as Data_Releaser
-    participant Broker as Credential_Broker
-    participant WFM as Workflow_Manager
-    participant FM as Filemanager
+    participant Athena as Athena (OrcaVault Mart)
     participant Auth as Authorization_Service
     participant RAM as VPC Lattice / RAM
     participant S3 as Researcher S3 (Manifest)
 
     Admin->>CLI: share --libraries L1,L2 --account R [--expiry D]
-    CLI->>Broker: resolve per-purpose credential sources
 
     Note over CLI,RAM: Preflight (Req 5): verify lattice/RAM association is active
-    CLI->>Broker: creds for Data_Control role
     CLI->>RAM: association active for R?
     alt association missing/inactive
         RAM-->>CLI: not active
         CLI-->>Admin: refuse, report connectivity gap
     end
 
-    Note over CLI,FM: Resolve library_id → files (Req 1)
-    CLI->>Broker: creds for OrcaBus metadata role (JWT)
-    CLI->>WFM: workflowrun?libraries__library_id=L1,L2
-    WFM-->>CLI: portal_run_ids
-    alt any library has no workflow run
-        CLI-->>Admin: report invalid library IDs, abort
+    Note over CLI,Athena: Resolve library_id → read files (Req 1, single query)
+    CLI->>Athena: SELECT from mart.lims / mart.bam (bam,cram) + join mart.output
+    Athena-->>CLI: rows (library_id, portal_run_id, bucket, key, storage_class, output prefix)
+    alt any library unknown (no mart.lims row) or has no read files
+        CLI-->>Admin: report unknown/unmapped library IDs, abort
     end
-    CLI->>FM: s3/attributes?portalRunId=...
-    FM-->>CLI: S3 object records (bucket/key)
-    alt portal_run_id has no S3 objects
-        CLI-->>Admin: report unmapped IDs, abort
+    alt any resolved file has archived storage_class
+        CLI-->>Admin: report archived files, abort (not streamable by htsget)
     end
 
-    Note over CLI,Auth: Persist share (Req 1.4, Req 2, Req 12 idempotency)
-    CLI->>Broker: creds for Data_Control role
+    Note over CLI,Auth: Persist share (Req 1.5, Req 2, Req 12 idempotency)
     CLI->>Auth: check existing active shares (idempotency)
-    CLI->>Auth: create Share_Record (libs, S3 paths, R, [expiry])
+    CLI->>Auth: create Share_Record (libs, S3 prefixes, R, [expiry])
     Auth-->>CLI: share identifier
 
-    Note over CLI,S3: Deliver manifest (Req 7)
-    CLI->>Broker: creds for Researcher_Account role
+    Note over CLI,S3: Deliver manifest (Req 7); researcher bucket policy grants Data Control
     CLI->>S3: put Manifest (htsget base URL, paths, expiry)
     CLI-->>Admin: confirm (share id, count, expiry)
 ```
@@ -206,19 +200,36 @@ sequenceDiagram
 - **Owner = Data Control, not Production.** Concentrates the sharing authority in the
   account whose sole purpose is external data control, contains blast radius, and
   decouples "authorized to share" from "is a production principal." (Req 11.4)
-- **Source-agnostic, independent per-purpose credentials, not chaining.** Each purpose is
-  resolved from its own configured source (named profile / SSO / `credential_process` /
-  assumed ARN), independently. Purposes need not share a base identity, and no account
-  need trust another — supporting the common per-account-SSO-profile setup as well as a
-  single base identity that assumes per-purpose roles. Chaining is
-  disallowed because it would re-couple accounts and hit the 1-hour role-chaining session
-  limit. External researcher accounts, which the operator cannot reach with a held
-  profile, are handled via a researcher-provisioned cross-account role (or bucket-policy
-  grant) trusting the operator's principal. (Req 11.1, 11.7, 11.8)
-- **IAM provisioning out of scope.** Creating roles would require near-admin IAM write
-  across accounts (the bootstrapping paradox) and is infeasible in researcher accounts.
-  Roles are defined externally via IaC; the tool consumes role ARNs from config.
-  (Req 11.3)
+- **Single Data Control identity; researcher trust lives in infra.** The tool
+  authenticates once into the Data Control account and uses that identity for every
+  command. Manifest delivery works cross-account because each researcher bucket policy
+  grants the Data Control account write/delete on the manifest key (plus a KMS key-policy
+  grant if the bucket is SSE-KMS encrypted). That trust is provisioned externally, not by
+  the tool, which keeps the earlier multi-account credential broker — per-purpose
+  resolution, no-chaining, external-researcher roles — unnecessary. (Req 11.1, 11.5)
+- **IAM/trust provisioning out of scope.** The tool creates no roles, bucket policies, or
+  key policies; it assumes the Data Control credentials and the researcher-side grants
+  already exist (defined via IaC). (Req 11.3, 11.5)
+- **Warehouse resolution over OrcaBus APIs.** Library resolution reads the OrcaVault Mart
+  (a downstream warehouse) via a single Athena query rather than chaining the Workflow
+  Manager and Filemanager APIs. The Mart already denormalizes `library_id`,
+  `portal_run_id`, `bucket`/`key`, `format`, and `storage_class` (curated to the current,
+  non-deleted location), so one query does what previously took two API hops plus JWT
+  auth. The tradeoffs, both accepted: (1) the Mart rebuilds on a daily schedule, so
+  resolution can lag live OrcaBus state by up to ~1 day — fine for sharing
+  already-produced data; (2) only aligned-read files are covered today (`mart.bam`);
+  variants (VCF/BCF) wait for a warehouse mart. In exchange we drop the OrcaBus JWT
+  secret, the Production-account dependency, and all FMAnnotator/Filemanager reasoning.
+- **Consume the Mart via Lake Formation, don't reach into the warehouse account.** The
+  Warehouse account (115253169271) shares the Mart to the Data Control account through
+  Lake Formation / RAM; Data Control holds a resource-link database (`mart`) and queries
+  it with local Athena. The tool therefore needs no credentials in the warehouse account,
+  and Lake Formation can enforce row/column/cell governance on what is shared. This reuses
+  the established OrcaHouse source/consumer pattern. (Req 11.2)
+- **Grant at prefix, not per-object.** Shared locations are S3 prefixes (the workflow
+  output prefix from `mart.output`, else the file's parent prefix), so htsget index
+  sidecars (`.bai`/`.crai`/`.csi`) resolve under the same grant. Per-object grants would
+  risk excluding indexes and break htsget. (Req 1.4)
 - **Two cache layers with different TTL policies.** The API Gateway cache (Layer 1) is
   externally flushable; the htsget-rs in-process cache (Layer 2) is not. `max-age` is
   set to the exact remaining share lifetime so natural expiry is precise; revocation is
@@ -231,7 +242,7 @@ sequenceDiagram
   does not change in place — editing a researcher's access is done by revoke + recreate
   (Req 3.9). The Manifest is a pure projection of active Share_Records: descriptive only,
   never an access-control surface (enforcement is server-side via the callout), so it can
-  be regenerated or overwritten freely (Req 7.8) and stays convergent (Property 10)
+  be regenerated or overwritten freely (Req 7.8) and stays convergent (Property 9)
   without drift. Adding libraries is compositional (a new share; the manifest unions),
   while removing a subset means revoking and recreating — an accepted tradeoff for the
   simpler immutable-share model.
@@ -266,97 +277,75 @@ The top-level tool, written in Go. Subcommands map directly to requirements:
 | `list [--account <id>]` | Audit shares | 8 |
 | `validate [--account <id>] [--test-setup]` | Preflight / end-to-end infra check | 15 |
 
-Cross-cutting: all commands resolve credentials through the Credential_Broker and only
-resolve the credential sources the specific command needs (Req 11.9).
+### Authentication
 
-### Credential_Broker
+The tool uses a single set of Data Control account credentials for all commands, resolved
+via the standard AWS credential chain — no custom credential handling. The operator
+authenticates however they normally would (an SSO/`credential_process` profile, environment
+variables, or an assumed role); the AWS SDK for Go resolves and refreshes it. Selecting the
+source is just a config profile name or the default chain:
 
-Obtains and vends purpose-scoped AWS credentials. It is **credential-source-agnostic**:
-each purpose is backed by an independently configured source, resolved through the
-standard AWS credential chain. A source may be a named profile (AWS SSO / IAM Identity
-Center, or a `credential_process` provider), an assumed role ARN, or static credentials.
-The broker never assumes the purposes share a base identity and
-never chains one purpose's credentials to obtain another's (Req 11.1, 11.7).
-
-The three purposes:
-
-- **OrcaBus metadata** — read `orcabus/token-service-jwt`, then call the Workflow
-  Manager and Filemanager APIs with a `Bearer` token.
-- **Data Control** — read/write `Share_Record`s, manage VPC Lattice / RAM, and flush the
-  API Gateway cache. This is always the owner of the shares (Req 11.5).
-- **Researcher (per account)** — write/delete the Manifest object and, for validation,
-  list/invoke the `Test_Lambda`.
-
-#### Credential resolution
-
-The broker delegates to the AWS SDK's profile machinery wherever possible, so it works
-with whatever mechanism the operator already uses. Two common configurations:
-
-- **Independent per-account profiles.** Each purpose maps to a distinct profile in its
-  own account (for example SSO profiles, or profiles using a `credential_process`
-  provider). There is no shared base identity and no inter-account trust — each profile
-  is self-contained. The SDK resolves each profile (including any `credential_process`)
-  transparently; the tool needs no provider-specific code. The operator is free to
-  configure these profiles however they wish.
-
-  ```ini
-  # Illustrative only — any profile configuration the AWS SDK understands works.
-  [profile prod/OrcaBusRead]
-  # ... SSO settings, or credential_process = <your provider> ...
-
-  [profile data-control/ShareAdmin]
-  # ...
-
-  [profile researcher-534840902377/ManifestWrite]
-  # ...
-  ```
-
-- **Single base identity + AssumeRole (hub-and-spoke).** One base identity assumes a
-  role per purpose. Trust is star-shaped: each target role trusts the base identity, and
-  the target accounts do **not** trust each other (this is why chaining is disallowed —
-  see Req 11.7). A compromise of one role yields no path to the others.
-
-Whichever is used, resolution is independent per purpose and correctness never depends
-on a shared identity or inter-account trust.
-
-Interface (conceptual):
-
-```go
-type Purpose int
-const (
-    PurposeOrcaBus Purpose = iota
-    PurposeDataControl
-    PurposeResearcher // parameterized by account id
-)
-
-type CredentialBroker interface {
-    // Returns cached, non-expired credentials for the purpose, resolving the
-    // configured source (named profile / credential_process / assumed ARN /
-    // static) via the standard AWS chain. Never chains one purpose to another.
-    Credentials(ctx context.Context, p Purpose, account string) (aws.Credentials, error)
-}
+```ini
+# Illustrative only — any profile the AWS SDK understands works.
+[profile data-control]
+# SSO settings, or credential_process = <your provider>
 ```
 
-#### External researcher accounts
+That identity must carry the permissions for everything the tool does (Req 11.2):
 
-The per-account-profile model works for accounts the operator can reach directly (e.g.
-the demo account within UMCCR SSO). A genuinely external researcher account cannot be
-reached by an operator-held profile; for those, the Researcher purpose is resolved
-through a cross-account IAM role that the researcher provisions and configures to trust
-the operator's principal, or through an equivalent bucket-policy grant to the operator's
-principal (Req 11.8). The researcher owns that trust configuration; it is out of scope
-for the tool (Req 11.3).
+- **Warehouse query** — Athena `StartQueryExecution` / `GetQueryExecution` /
+  `GetQueryResults`, Glue/Lake Formation catalog read on the `mart` resource-link database,
+  and read of the Athena workgroup S3 results location.
+- **Share management** — read/write `Share_Record`s (DynamoDB via the Authorization
+  Service), manage VPC Lattice / RAM, and flush the API Gateway cache.
+- **Manifest delivery** — cross-account `s3:PutObject`/`s3:DeleteObject` on the researcher
+  manifest bucket, and `lambda:InvokeFunction` on the researcher `Test_Lambda` for
+  validation. These succeed because the researcher-side resource policies (bucket policy,
+  KMS key policy, Lambda resource policy) grant the Data Control account; that trust is
+  provisioned externally, not by the tool (Req 11.5).
 
-### OrcaBus clients (Workflow Manager, Filemanager)
+If credentials fail to resolve or a call is denied for a missing permission, the command
+reports the failure and exits non-zero without partial actions (Req 11.6).
 
-- **Workflow Manager client**: `GET /api/v1/workflowrun?libraries__library_id=<id>`
-  returns workflow runs whose `portal_run_id` is used downstream. Existence of at least
-  one run validates the library ID (Req 1.1).
-- **Filemanager client**: `GET /api/v1/s3/attributes?portalRunId=<id>` (or
-  `?attributes[portalRunId]=<id>`) returns S3 object records (bucket/key). Used to
-  resolve concrete paths and to detect unmapped portal_run_ids (Req 1.3, 1.5).
+### OrcaVault client (warehouse resolution)
 
-Both use the OrcaBus JWT `Bearer` token and target `https://<service>.<stage>.umccr.org`.
+Resolves libraries to shareable S3 prefixes with a single read-only Athena query against
+the OrcaVault Mart, consumed through the Lake Formation resource-link database in the
+Data Control account. The client uses the Athena API (`StartQueryExecution`, poll
+`GetQueryExecution` until `SUCCEEDED`/`FAILED`, then `GetQueryResults`), running in the
+configured workgroup so results land in that workgroup's S3 output location. It never
+connects to Redshift directly and holds no warehouse-account credentials (Req 11.2).
+
+Resolution query (conceptual; reads only, `format` in (`bam`,`cram`)):
+
+```sql
+SELECT b.library_id,
+       b.portal_run_id,
+       b.bucket,
+       b.key,
+       b.format,
+       b.storage_class,
+       o.bucket  AS output_bucket,
+       o.prefix  AS output_prefix
+FROM   mart.bam AS b
+LEFT   JOIN mart.output AS o ON o.portal_run_id = b.portal_run_id
+WHERE  b.library_id IN (<library_ids>)
+  AND  lower(b.format) IN ('bam', 'cram');
+```
+
+Library existence (Req 1.1) is confirmed with a companion probe against `mart.lims`
+(`SELECT DISTINCT library_id FROM mart.lims WHERE library_id IN (...)`); a library absent
+from `mart.lims` is reported as unknown, and a library present but returning no `mart.bam`
+rows is reported as having no shareable reads (Req 1.6). The client derives each shared
+location as an S3 prefix — the `output_prefix` when present, otherwise the parent prefix
+of `key` — so index sidecars are covered (Req 1.4). Any row whose `storage_class` is an
+archived tier (e.g. `DeepArchive`, Glacier tiers) aborts the share as non-streamable
+(Req 1.7). Library IDs are bound as parameterized/validated values (not string-concatenated)
+to avoid SQL injection.
+
+Because the Mart is a daily-batch warehouse, resolution reflects the most recent build
+and may lag live OrcaBus state by up to ~1 day — accepted for sharing already-produced
+data.
 
 ### Authorization_Service
 
@@ -404,8 +393,9 @@ in the UMCCR htsget-rs repo and is separately tested.
 ### Manifest writer
 
 Generates the Manifest JSON and writes it to a well-known key in the researcher's S3
-bucket via the Researcher role. Regenerates on create/revoke/extend/expiry and deletes
-the object when no active shares remain (Req 7).
+bucket using the Data Control credentials, which the researcher bucket policy grants
+(Req 11.5). Regenerates on create/revoke/extend/expiry and deletes the object when no
+active shares remain (Req 7).
 
 ## Data Models
 
@@ -490,7 +480,7 @@ recreate (Req 3.9); there is no in-place edit.
       "files": [
         { "request": "reads/<id>" },
         {
-          "request": "variants/<id>",
+          "request": "reads/<id>",
           "rules": [ { "referenceName": "chr1" } ]
         }
       ]
@@ -500,34 +490,27 @@ recreate (Req 3.9); there is no in-place edit.
 ```
 
 The researcher issues `{htsgetBaseUrl}/{request}`, adding their own runtime query
-parameters (referenceName/start/end/fields/class) or a POST body. The `reads` vs
-`variants` endpoint is encoded in `request`. An absent or empty `rules` means
+parameters (referenceName/start/end/fields/class) or a POST body. The current version
+emits only `reads/` request paths (aligned reads); the `request` field also encodes the
+`variants/` endpoint for when a variant mart is added. An absent or empty `rules` means
 unrestricted access to that file.
 
 ### Configuration
 
-Supplied via a config file and/or flags; contains no secrets (credential-source
-identifiers and endpoints only). Credential sources and roles are provisioned externally
-(Req 11.3). Each purpose's `source` is credential-source-agnostic: a named profile
-(SSO or a `credential_process` provider), a role ARN to assume, or left unset to fall
-back to the default AWS chain.
+Supplied via a config file and/or flags; contains no secrets (a credential source
+identifier and endpoints only). The Data Control credentials are provisioned externally
+(Req 11.3); `profile` names a source the AWS SDK understands, or is omitted to use the
+default chain.
 
 ```yaml
-credentialSources:
-  orcabusMetadata:
-    profile: "prod/OrcaBusRead"          # or  roleArn: "arn:aws:iam::472057503814:role/..."
-  dataControl:
-    profile: "data-control/ShareAdmin"   # owner of Share_Records (Req 11.5)
-  researcher:                            # per-account
-    "534840902377":
-      profile: "researcher-534840902377/ManifestWrite"
-    # external researcher example: assume a role the researcher provisioned to trust us
-    "999999999999":
-      roleArn: "arn:aws:iam::999999999999:role/UmccrManifestWriter"
-      externalId: "..."                  # recommended for third-party trust (Req 11.8)
+profile: "data-control"                  # single Data Control identity; omit for default chain (Req 11.1)
+warehouse:                               # OrcaVault Mart via Athena (Lake Formation share)
+  athenaWorkgroup: "primary"             # workgroup in the Data Control (consumer) account
+  database:        "mart"                # Lake Formation resource-link database
+  catalog:         "AwsDataCatalog"      # Glue catalog (resource-link), not the Redshift connector
+  # results location comes from the workgroup config; override only if the workgroup is unmanaged
+  # resultsLocation: "s3://<data-control-athena-results>/data-releaser/"
 endpoints:
-  workflowManager: "https://workflow.<stage>.umccr.org"
-  filemanager:     "https://file.<stage>.umccr.org"
   authorization:   "https://auth.data-control.umccr.org"
   htsgetBaseUrl:   "https://htsget-lattice.data-control.umccr.org"
 cache:
@@ -545,21 +528,26 @@ Errors are grouped by category, each with a defined behavior that ties back to t
 requirements:
 
 - **Input validation** (empty library list, missing account, expiry < 1 day): reject
-  before any network call; non-zero exit; no OrcaBus/Filemanager queries (Req 1.2, 2.2).
-- **Resolution failures** (library has no workflow run, portal_run_id has no S3 object):
-  collect and report all invalid/unmapped IDs to stderr, then abort with no partial
-  records (Req 1.5).
+  before any network call; non-zero exit; no Athena query is issued (Req 1.2, 2.2).
+- **Resolution failures** (library unknown to `mart.lims`, or no `mart.bam` read files):
+  collect and report all unknown/unmapped IDs to stderr, then abort with no partial
+  records (Req 1.6).
+- **Archived-file refusal**: if any resolved read file reports an archived
+  `storage_class` (e.g. `DeepArchive` or a Glacier tier), htsget-rs cannot stream it
+  without a restore; report the affected library IDs and archived locations and abort
+  before any write (Req 1.7).
 - **Atomicity / partial failure**: a share is only considered created once the
   `Share_Record` is persisted. Manifest write happens after; if it fails, the share
   exists but the CLI reports the manifest failure and offers retry rather than rolling
-  back the record. Resolution/preflight failures abort before any write (Req 1.6).
-- **Connectivity failures** (Workflow Manager, Filemanager, Authorization Service, RAM/
-  VPC Lattice APIs unreachable): identify the failed service and abort without partial
-  state (Req 1.6, 5.5, 8.5).
-- **Credential source resolution failures**: if any required purpose's credential source
-  cannot be resolved (failed SSO / `credential_process` invocation, failed role
-  assumption, or missing profile), report which purpose failed and exit non-zero without
-  partial actions (Req 11.11).
+  back the record. Resolution/preflight failures abort before any write (Req 1.8).
+- **Connectivity failures** (OrcaVault Mart via Athena / Lake Formation, Authorization
+  Service, RAM/VPC Lattice APIs unreachable, or an Athena query completing in a
+  non-success state): identify the failed component and abort without partial state
+  (Req 1.8, 5.5, 8.5).
+- **Credential / permission failures**: if the Data Control credentials cannot be
+  resolved (failed SSO / `credential_process`, missing profile) or a call is denied for a
+  missing permission, report the failure and exit non-zero without partial actions
+  (Req 11.6).
 - **Authorization callout failures (runtime, in htsget-rs)**: fail-closed — deny on
   cache miss when the Authorization Service is unreachable or the response is malformed
   (Req 4.5, 4.6). Cache-layer unavailability degrades to a fresh callout, never to an
@@ -573,8 +561,8 @@ requirements:
 ## Correctness Properties
 
 Invariants the design must uphold regardless of implementation. The Testing Strategy
-below validates these. Properties 1–7 are safety (nothing unauthorized happens);
-Properties 8–11 are liveness/temporal (the right thing eventually happens). The
+below validates these. Properties 1–6 are safety (nothing unauthorized happens);
+Properties 7–10 are liveness/temporal (the right thing eventually happens). The
 security-sensitive ones (Properties 1 and 2) take priority.
 
 ### Property 1: Fail-closed
@@ -600,53 +588,45 @@ holds with all caches removed.
 
 ### Property 4: No partial shares
 
-A share is fully created or not at all; resolution, preflight, or connectivity failures
-leave no partial Share_Record.
+A share is fully created or not at all; resolution, archived-file, preflight, or
+connectivity failures leave no partial Share_Record.
 
-**Validates: Requirements 1.5, 1.6**
+**Validates: Requirements 1.6, 1.7, 1.8**
 
 ### Property 5: Data Control ownership
 
-Every Share_Record is written through the Data_Control_Account credential, regardless of
-the operator's identity.
+Every Share_Record is written by the Data_Control_Account, which owns all shares.
 
-**Validates: Requirements 11.5**
+**Validates: Requirements 11.4**
 
-### Property 6: Credential isolation
-
-Credentials resolved for one purpose are never reused for another, resolution is never
-chained, and no account need trust another to gain access.
-
-**Validates: Requirements 11.1, 11.6, 11.7**
-
-### Property 7: No internal disclosure
+### Property 6: No internal disclosure
 
 Errors surfaced to researchers never reveal internal account, path, or policy details.
 
 **Validates: Requirements 6.3**
 
-### Property 8: Bounded revocation
+### Property 7: Bounded revocation
 
 After a revoke, access is denied within the Cache_TTL ceiling, or immediately if the
 Authorization_Cache is flushed.
 
 **Validates: Requirements 3.2, 3.8, 13.1**
 
-### Property 9: Bounded expiry
+### Property 8: Bounded expiry
 
 An expired share stops authorizing access no later than its expiry plus the cache
 staleness bound.
 
 **Validates: Requirements 2.4, 13.1**
 
-### Property 10: Manifest convergence
+### Property 9: Manifest convergence
 
 After any create/revoke/extend/expiry, the researcher's manifest reflects exactly the
 remaining active grants, and is deleted when none remain.
 
 **Validates: Requirements 7.3, 7.4**
 
-### Property 11: Idempotent creation
+### Property 10: Idempotent creation
 
 Repeating an identical share command yields the same share, never a duplicate active
 grant.
@@ -655,20 +635,22 @@ grant.
 
 ## Testing Strategy
 
-- **Unit tests (Go)**: Credential_Broker (source-agnostic per-purpose resolution across
-  named profiles / `credential_process` / assumed ARNs, no chaining, credential caching),
-  the two-step resolution logic, idempotency set-matching
+- **Unit tests (Go)**: the OrcaVault resolution logic (SQL generation with parameterized library IDs,
+  reads-only `format` filter, prefix derivation from `mart.output`/`key`, unknown vs
+  unmapped classification, archived-`storage_class` refusal), idempotency set-matching
   (Req 12), manifest generation/schema (Req 7.6), `max-age` computation (Req 13.1/13.2),
   and effective-status derivation for `Share_Record`s.
 - **Integration tests**: Authorization Service Lambda against DynamoDB Local (create/
-  revoke/extend/list, GSI query by VPC ARN, cache-header emission); OrcaBus clients
-  against recorded/mocked API responses; S3 manifest writes against a local S3 emulator.
+  revoke/extend/list, GSI query by VPC ARN, cache-header emission); the OrcaVault client
+  against a mocked Athena API (query submission, polling, result-set parsing, and
+  non-success query states); S3 manifest writes against a local S3 emulator.
 - **htsget-rs tests (Req 14.7)**: unit and integration coverage for the callout
   cache — `max-age`/`Age` honoring, per-identity key isolation, disable/TTL-cap config,
   concurrency safety, and fresh-callout-on-miss.
 - **End-to-end / operational (Req 15)**: the `validate` command doubles as the automated
-  end-to-end test. Provider-side checks (roles, OrcaBus reachability, auth schema
-  conformance, htsget-rs health, cross-account S3) plus, when a researcher account is
+  end-to-end test. Provider-side checks (roles, OrcaVault Mart reachability via Athena
+  over the Lake Formation share, auth schema conformance, htsget-rs health, cross-account
+  S3) plus, when a researcher account is
   given, lattice/RAM association and a genuine in-VPC request via the `Test_Lambda`. The
   optional `--test-setup` canary mode exercises the full share path (create synthetic
   share -> invoke Test_Lambda -> clean up).
@@ -730,7 +712,7 @@ resource with attributes and `parents` hierarchy), published by the Authorizatio
 alongside the policies and cached by htsget-rs; (3) the **request** — built by htsget-rs
 per call. Policies + entities are how the Authorization_Service signals what is allowed;
 the request is htsget-rs's own per-call question. Entity attributes must be sourced at
-share creation (e.g. `format` from Filemanager, resource `duoCodes` from dataset consent
+share creation (e.g. `format` from the OrcaVault Mart, resource `duoCodes` from dataset consent
 metadata, principal `approvedPurposes` from the researcher's passport) — extra data a
 plain allow-list does not need.
 

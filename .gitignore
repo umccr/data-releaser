@@ -24,3 +24,6 @@ Thumbs.db
 # IDE
 .idea/
 .vscode/
+
+# Local research clones of upstream repos (not part of this project)
+/.research/
