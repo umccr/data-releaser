@@ -31,6 +31,8 @@ The relevant repos in OrcaBus are:
 * https://github.com/OrcaBus/orca-ui - the front-end UI portal.
 * https://github.com/OrcaBus/service-shared-resources - shared base resources like a database and event bus.
 * https://github.com/OrcaBus/platform-cdk-constructs - shared platform SDK.
+* https://github.com/umccr/orcahouse - the data warehouse.
+* https://github.com/umccr/orcahouse-doc - the data warehouse docs.
 
 The htsget-rs service is a protocol that allows a query to request a certain file, or regions of a file to be downloaded in a two-part ticket response system. It has a rich config set that allows fine-grained access control, and is the basis for the VPC lattice share.
 

@@ -26,10 +26,11 @@ The design centers on four decisions established during requirements analysis:
    (Req 11).
 3. **Single-query warehouse resolution.** The full `library_id -> portal_run_id -> S3
    path` mapping is resolved by one read-only Athena query against the OrcaVault Mart
-   (`mart.lims` to validate existence, `mart.bam` for read files, `mart.output` for the
-   grant prefix), consumed through a Lake Formation share in the Data Control account.
-   This replaces the previous two-hop OrcaBus API resolution and removes the dependency
-   on the Workflow Manager, Filemanager, and the OrcaBus JWT (Req 1).
+   (`mart.bam`, filtered to `format = 'bam'`), consumed through a Lake Formation share
+   in the Data Control account. A library with no matching rows is reported as having no
+   shareable reads. The grant prefix is derived from the parent prefix of each resolved
+   `.bam` key. This replaces the previous two-hop OrcaBus API resolution and removes the
+   dependency on the Workflow Manager, Filemanager, and the OrcaBus JWT (Req 1).
 4. **Dynamic authorization with bounded caching.** htsget-rs calls the Authorization
    Service at request time, but reuses decisions through two cache layers to avoid a
    callout per request. Expiry is made precise via `max-age`; revocation is bounded by
@@ -53,7 +54,7 @@ flowchart LR
     end
 
     subgraph WH["Warehouse Account (115253169271)"]
-        OV[("OrcaVault Mart<br/>mart.lims / mart.bam / mart.output")]
+        OV[("OrcaVault Mart<br/>mart.bam")]
         LF{{"Lake Formation<br/>cross-account share (RAM)"}}
     end
 
@@ -127,10 +128,10 @@ sequenceDiagram
     end
 
     Note over CLI,Athena: Resolve library_id → read files (Req 1, single query)
-    CLI->>Athena: SELECT from mart.lims / mart.bam (bam,cram) + join mart.output
-    Athena-->>CLI: rows (library_id, portal_run_id, bucket, key, storage_class, output prefix)
-    alt any library unknown (no mart.lims row) or has no read files
-        CLI-->>Admin: report unknown/unmapped library IDs, abort
+    CLI->>Athena: SELECT from mart.bam (bam)
+    Athena-->>CLI: rows (library_id, portal_run_id, bucket, key, storage_class)
+    alt any library has no read files (no shareable BAM rows)
+        CLI-->>Admin: report library IDs with no shareable reads, abort
     end
     alt any resolved file has archived storage_class
         CLI-->>Admin: report archived files, abort (not streamable by htsget)
@@ -212,7 +213,7 @@ sequenceDiagram
   already exist (defined via IaC). (Req 11.3, 11.5)
 - **Warehouse resolution over OrcaBus APIs.** Library resolution reads the OrcaVault Mart
   (a downstream warehouse) via a single Athena query rather than chaining the Workflow
-  Manager and Filemanager APIs. The Mart already denormalizes `library_id`,
+  Manager and Filemanager APIs. `mart.bam` already denormalizes `library_id`,
   `portal_run_id`, `bucket`/`key`, `format`, and `storage_class` (curated to the current,
   non-deleted location), so one query does what previously took two API hops plus JWT
   auth. The tradeoffs, both accepted: (1) the Mart rebuilds on a daily schedule, so
@@ -226,10 +227,12 @@ sequenceDiagram
   it with local Athena. The tool therefore needs no credentials in the warehouse account,
   and Lake Formation can enforce row/column/cell governance on what is shared. This reuses
   the established OrcaHouse source/consumer pattern. (Req 11.2)
-- **Grant at prefix, not per-object.** Shared locations are S3 prefixes (the workflow
-  output prefix from `mart.output`, else the file's parent prefix), so htsget index
-  sidecars (`.bai`/`.crai`/`.csi`) resolve under the same grant. Per-object grants would
-  risk excluding indexes and break htsget. (Req 1.4)
+- **Grant at prefix, not per-object.** Shared locations are S3 prefixes (the parent
+  prefix of the resolved `.bam` key), so htsget index sidecars resolve under the same
+  grant. The `.bai` index is present in `mart.bam` as its own row and is co-located
+  under the same prefix as the `.bam`, so index sidecars are covered by the same grant.
+  This prefix is narrower than a whole-run output prefix, avoiding over-granting.
+  Per-object grants would risk excluding indexes and break htsget. (Req 1.4)
 - **Two cache layers with different TTL policies.** The API Gateway cache (Layer 1) is
   externally flushable; the htsget-rs in-process cache (Layer 2) is not. `max-age` is
   set to the exact remaining share lifetime so natural expiry is precise; revocation is
@@ -316,7 +319,7 @@ Data Control account. The client uses the Athena API (`StartQueryExecution`, pol
 configured workgroup so results land in that workgroup's S3 output location. It never
 connects to Redshift directly and holds no warehouse-account credentials (Req 11.2).
 
-Resolution query (conceptual; reads only, `format` in (`bam`,`cram`)):
+Resolution query (conceptual; reads only, `format = 'bam'`):
 
 ```sql
 SELECT b.library_id,
@@ -324,24 +327,21 @@ SELECT b.library_id,
        b.bucket,
        b.key,
        b.format,
-       b.storage_class,
-       o.bucket  AS output_bucket,
-       o.prefix  AS output_prefix
+       b.storage_class
 FROM   mart.bam AS b
-LEFT   JOIN mart.output AS o ON o.portal_run_id = b.portal_run_id
 WHERE  b.library_id IN (<library_ids>)
-  AND  lower(b.format) IN ('bam', 'cram');
+  AND  lower(b.format) = 'bam';
 ```
 
-Library existence (Req 1.1) is confirmed with a companion probe against `mart.lims`
-(`SELECT DISTINCT library_id FROM mart.lims WHERE library_id IN (...)`); a library absent
-from `mart.lims` is reported as unknown, and a library present but returning no `mart.bam`
-rows is reported as having no shareable reads (Req 1.6). The client derives each shared
-location as an S3 prefix — the `output_prefix` when present, otherwise the parent prefix
-of `key` — so index sidecars are covered (Req 1.4). Any row whose `storage_class` is an
-archived tier (e.g. `DeepArchive`, Glacier tiers) aborts the share as non-streamable
-(Req 1.7). Library IDs are bound as parameterized/validated values (not string-concatenated)
-to avoid SQL injection.
+Shareability (Req 1.1) is determined solely from `mart.bam`: a library ID that returns no
+`format = 'bam'` rows is reported as having no shareable reads — with a message noting the
+ID may not exist, may not be aligned yet, or may have reads that are archived — and the
+share is aborted (Req 1.1, 1.6). The client derives each shared location as an S3 prefix —
+the parent prefix of the resolved `.bam` `key` (which covers the co-located `.bai`) — so
+index sidecars are covered (Req 1.4). Any row whose `storage_class` is an archived tier
+(e.g. `DeepArchive`, Glacier tiers) aborts the share as non-streamable (Req 1.7). Library
+IDs are bound as parameterized/validated values (not string-concatenated) to avoid SQL
+injection.
 
 Because the Mart is a daily-batch warehouse, resolution reflects the most recent build
 and may lag live OrcaBus state by up to ~1 day — accepted for sharing already-produced
@@ -529,8 +529,8 @@ requirements:
 
 - **Input validation** (empty library list, missing account, expiry < 1 day): reject
   before any network call; non-zero exit; no Athena query is issued (Req 1.2, 2.2).
-- **Resolution failures** (library unknown to `mart.lims`, or no `mart.bam` read files):
-  collect and report all unknown/unmapped IDs to stderr, then abort with no partial
+- **Resolution failures** (a library ID returns no `format = 'bam'` rows from `mart.bam`):
+  collect and report all affected library IDs to stderr, then abort with no partial
   records (Req 1.6).
 - **Archived-file refusal**: if any resolved read file reports an archived
   `storage_class` (e.g. `DeepArchive` or a Glacier tier), htsget-rs cannot stream it
@@ -636,8 +636,9 @@ grant.
 ## Testing Strategy
 
 - **Unit tests (Go)**: the OrcaVault resolution logic (SQL generation with parameterized library IDs,
-  reads-only `format` filter, prefix derivation from `mart.output`/`key`, unknown vs
-  unmapped classification, archived-`storage_class` refusal), idempotency set-matching
+  bam-only `format` filter, prefix derivation from the `.bam` `key`, no-shareable-reads
+  detection (a library ID with no `format = 'bam'` rows in `mart.bam`),
+  archived-`storage_class` refusal), idempotency set-matching
   (Req 12), manifest generation/schema (Req 7.6), `max-age` computation (Req 13.1/13.2),
   and effective-status derivation for `Share_Record`s.
 - **Integration tests**: Authorization Service Lambda against DynamoDB Local (create/
