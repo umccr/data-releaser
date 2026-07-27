@@ -1,0 +1,19 @@
+# Pre-commit hooks for data-releaser.
+# Install once per clone:  pre-commit install
+# Run against everything:  pre-commit run --all-files
+#
+# Secret scanning only for now. Formatters, linters, and CDK checks are added
+# alongside the tooling they belong to (see tasks 22 and 24).
+repos:
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        args: ["--baseline", ".secrets.baseline"]
+        # Lock files are hash manifests: high entropy by nature, no secrets.
+        exclude: |
+          (?x)^(
+            go\.sum|
+            .*/Cargo\.lock|
+            \.secrets\.baseline
+          )$

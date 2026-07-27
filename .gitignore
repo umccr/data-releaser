@@ -27,3 +27,8 @@ Thumbs.db
 
 # Local research clones of upstream repos (not part of this project)
 /.research/
+# Upstream htsget-rs sub-clone, worked on for the Req 14 callout-cache contribution
+/htsget-rs/
+/htsget-cache/target/
+/.kiro/specs/data-releaser/tasks.meta.json
+/.kiro/steering/sandbox-environment.md

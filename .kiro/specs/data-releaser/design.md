@@ -12,7 +12,7 @@ it owns (Data Control account), ensures the researcher can reach htsget-rs (VPC 
 RAM), and publishes a manifest into the researcher's account so they know what they can
 query.
 
-The design centers on four decisions established during requirements analysis:
+The design centers on five decisions established during requirements analysis:
 
 1. **Data Control owns the shares.** The share lifecycle artifacts (Authorization
    Service, DynamoDB, htsget-rs, VPC Lattice, RAM) all live in the Data Control
@@ -35,6 +35,13 @@ The design centers on four decisions established during requirements analysis:
    Service at request time, but reuses decisions through two cache layers to avoid a
    callout per request. Expiry is made precise via `max-age`; revocation is bounded by
    cache TTL and can be accelerated by a cache flush (Req 4, 13, 14).
+5. **This project deploys what it operates, and nothing else.** The Authorization
+   Service Lambdas, their DynamoDB table, the API Gateway in front of them, and the
+   Manifest_Bucket are deployed from this repository as a CDK application (Req 16).
+   Everything else the design depends on — htsget-rs, OrcaVault and its Lake Formation
+   share, the VPC Lattice service and RAM share, the Data Account bucket policy, and the
+   Researcher_Account RAM/Lattice association — is deployed and owned elsewhere and is
+   treated as a stated prerequisite (Req 17).
 
 This document describes the architecture, the components and their interfaces, the
 data models, error handling, and the testing strategy. It references the acceptance
@@ -65,6 +72,7 @@ flowchart LR
         DDB[("DynamoDB<br/>Share_Records")]
         HTS["Htsget_Rs (Lambda)<br/>in-process cache - Layer 2"]
         LATTICE{{"VPC Lattice<br/>service network"}}
+        S3MAN[("S3 Manifest_Bucket<br/>per-account prefix")]
     end
 
     subgraph DATA["Data Account (503977275616)"]
@@ -72,7 +80,6 @@ flowchart LR
     end
 
     subgraph RES["Researcher Account (e.g. 534840902377)"]
-        S3MAN[("S3 Manifest")]
         TESTL["Test_Lambda<br/>(in-VPC probe)"]
         SEQERA["Seqera / consumer"]
     end
@@ -83,7 +90,8 @@ flowchart LR
     CLI -->|"resolve libraries: Athena query"| ATHENA
     CLI -->|"write/manage Share_Records"| APIGW
     CLI -->|"manage RAM / lattice assoc."| LATTICE
-    CLI -->|"write Manifest"| S3MAN
+    CLI -->|"write Manifest (same-account)"| S3MAN
+    SEQERA -.->|"read own manifest (cross-account)"| S3MAN
     CLI -.->|"validate: invoke probe (Req 15)"| TESTL
 
     %% Warehouse resolution path (Lake Formation share)
@@ -102,6 +110,34 @@ flowchart LR
     TESTL -->|"in-VPC htsget request"| LATTICE
 ```
 
+### Deployment ownership boundaries
+
+Every component in the diagram above is deployed by exactly one project. This table is
+the authoritative split (Req 16.8, Req 17); the documentation set derives its
+prerequisite checklist from it (Req 18.5).
+
+| Component | Account | Deployed by |
+| --- | --- | --- |
+| Authorization_Service Lambdas (callout + admin) | Data Control | **This repo** (`infrastructure/`) |
+| DynamoDB `ShareRecords` table and its two GSIs | Data Control | **This repo** |
+| API Gateway REST API, stage, and response cache | Data Control | **This repo** |
+| Lambda execution roles for the above | Data Control | **This repo** |
+| Manifest_Bucket and its cross-account read bucket policy | Data Control | **This repo** |
+| Operator/admin IAM policy (Req 11.2) | Data Control | **This repo** (optional; never by the CLI at runtime) |
+| Htsget_Rs Lambda and its `[auth.authorization]` callout config | Data Control | elsewhere |
+| VPC Lattice service, service network, and RAM share | Data Control | elsewhere |
+| Lake Formation `mart` resource link, grants, Athena workgroup | Data Control | elsewhere |
+| Htsget_Rs cross-account read role | Data Control | elsewhere |
+| OrcaVault, the `mart` layer, and the Lake Formation share | Warehouse | OrcaHouse |
+| Bioinformatics S3 bucket and its bucket policy | Data | elsewhere |
+| RAM share acceptance and VPC Lattice association | Researcher | researcher onboarding deployment |
+| IAM policy letting researcher principals read their manifest prefix | Researcher | researcher onboarding deployment |
+| Test_Lambda (optional in-VPC probe) | Researcher | htsget VPC Lattice consumer construct |
+
+The CLI itself deploys nothing and creates no IAM (Req 11.3). Where a prerequisite from
+the "elsewhere" rows is missing, `validate` is the intended way to find out, and it names
+the owning account rather than surfacing a bare AWS error (Req 17.7).
+
 ### Key flow: share creation
 
 Covers Req 1 (resolution + record creation), Req 2 (optional expiry), Req 5
@@ -116,7 +152,7 @@ sequenceDiagram
     participant Athena as Athena (OrcaVault Mart)
     participant Auth as Authorization_Service
     participant RAM as VPC Lattice / RAM
-    participant S3 as Researcher S3 (Manifest)
+    participant S3 as Manifest_Bucket (Data Control)
 
     Admin->>CLI: share --libraries L1,L2 --account R [--expiry D]
 
@@ -142,7 +178,7 @@ sequenceDiagram
     CLI->>Auth: create Share_Record (libs, S3 prefixes, R, [expiry])
     Auth-->>CLI: share identifier
 
-    Note over CLI,S3: Deliver manifest (Req 7); researcher bucket policy grants Data Control
+    Note over CLI,S3: Deliver manifest (Req 7); same-account write to Data Control Manifest_Bucket
     CLI->>S3: put Manifest (htsget base URL, paths, expiry)
     CLI-->>Admin: confirm (share id, count, expiry)
 ```
@@ -203,14 +239,15 @@ sequenceDiagram
   decouples "authorized to share" from "is a production principal." (Req 11.4)
 - **Single Data Control identity; researcher trust lives in infra.** The tool
   authenticates once into the Data Control account and uses that identity for every
-  command. Manifest delivery works cross-account because each researcher bucket policy
-  grants the Data Control account write/delete on the manifest key (plus a KMS key-policy
-  grant if the bucket is SSE-KMS encrypted). That trust is provisioned externally, not by
-  the tool, which keeps the earlier multi-account credential broker — per-purpose
-  resolution, no-chaining, external-researcher roles — unnecessary. (Req 11.1, 11.5)
-- **IAM/trust provisioning out of scope.** The tool creates no roles, bucket policies, or
-  key policies; it assumes the Data Control credentials and the researcher-side grants
-  already exist (defined via IaC). (Req 11.3, 11.5)
+  command. The manifest is written same-account into the Data Control Manifest_Bucket,
+  and researchers read their own manifest cross-account (the bucket policy grants each
+  account read on its own prefix). This keeps the earlier multi-account credential broker
+  — per-purpose resolution, no-chaining, external-researcher roles — unnecessary.
+  (Req 11.1, 11.5)
+- **IAM/trust provisioning out of scope for the CLI.** The tool creates no roles, bucket
+  policies, or key policies at runtime; it assumes the Data Control credentials exist and
+  that the Manifest_Bucket and its cross-account read grants are provisioned by the
+  Infrastructure_Stack and onboarding (Req 16.5). (Req 11.3, 11.5)
 - **Warehouse resolution over OrcaBus APIs.** Library resolution reads the OrcaVault Mart
   (a downstream warehouse) via a single Athena query rather than chaining the Workflow
   Manager and Filemanager APIs. `mart.bam` already denormalizes `library_id`,
@@ -301,11 +338,11 @@ That identity must carry the permissions for everything the tool does (Req 11.2)
   and read of the Athena workgroup S3 results location.
 - **Share management** — read/write `Share_Record`s (DynamoDB via the Authorization
   Service), manage VPC Lattice / RAM, and flush the API Gateway cache.
-- **Manifest delivery** — cross-account `s3:PutObject`/`s3:DeleteObject` on the researcher
-  manifest bucket, and `lambda:InvokeFunction` on the researcher `Test_Lambda` for
-  validation. These succeed because the researcher-side resource policies (bucket policy,
-  KMS key policy, Lambda resource policy) grant the Data Control account; that trust is
-  provisioned externally, not by the tool (Req 11.5).
+- **Manifest delivery** — same-account `s3:PutObject`/`s3:DeleteObject` on the Data
+  Control Manifest_Bucket, and `lambda:InvokeFunction` on the researcher `Test_Lambda` for
+  validation. The manifest write needs no external trust (it is same-account); only the
+  `Test_Lambda` invoke is cross-account, succeeding because the researcher's Lambda
+  resource policy grants the Data Control account (Req 11.5).
 
 If credentials fail to resolve or a call is denied for a missing permission, the command
 reports the failure and exits non-zero without partial actions (Req 11.6).
@@ -390,12 +427,131 @@ cache responses in-process keyed on requester identity, honoring `Cache-Control:
 max-age` (and `Age`), with a configurable enable/disable and TTL cap. This change lands
 in the UMCCR htsget-rs repo and is separately tested.
 
+The upstream integration points, as of `umccr/htsget-rs` at the time of writing, are:
+
+| Upstream location | Role in the change |
+| --- | --- |
+| `htsget-config/src/config/advanced/callout.rs` | `Callout { url, http, forward }` — the cache config (`enabled`, `max_ttl`) is added here, so caching becomes available to both auth and url-storage callouts |
+| `htsget-config/src/config/advanced/auth/authorization.rs` | `AuthorizationSource::Callout \| Static` — unchanged, but the callout arm is what gains caching |
+| `htsget-config/src/config/advanced/auth/response.rs` | `AuthorizationRestrictions` — the type the cache stores; no local duplicate is introduced |
+| `htsget-http/src/middleware/auth.rs` | `Auth::query_authorization_service` and `Auth::fetch_from_callout` — the cache lookup wraps the former; the latter must be adjusted to read `Cache-Control`/`Age` from the response headers before the body is consumed |
+
+Three constraints follow from that shape and govern the implementation:
+
+- **The response headers are currently discarded.** `fetch_from_callout` goes straight to
+  `response.json()`, so `Cache-Control` and `Age` are unavailable to a caller. Honoring
+  them (Req 14.2) requires reading `response.headers()` first. This is the only change to
+  existing upstream behaviour and should be made without altering the public signature.
+- **The cache key must be deployment-neutral.** Keying on "source VPC ARN" is an AWS
+  specific notion that does not belong in htsget-rs. The upstream-appropriate key is the
+  callout URL plus the forwarded header set that `Auth::forwarded_headers` already
+  produces — which, in this deployment, contains the VPC ARN. Per-identity isolation
+  (Req 14.5, Property 2) is preserved without AWS semantics leaking upstream.
+- **No new dependency is assumed.** A TTL cache crate (`moka`) is the natural
+  implementation, but it would be a new upstream dependency; a `RwLock<HashMap>` with
+  manual TTL using crates already present is the fallback. This is settled with upstream
+  maintainers before the change is written, not after.
+
 ### Manifest writer
 
-Generates the Manifest JSON and writes it to a well-known key in the researcher's S3
-bucket using the Data Control credentials, which the researcher bucket policy grants
-(Req 11.5). Regenerates on create/revoke/extend/expiry and deletes the object when no
-active shares remain (Req 7).
+Generates the Manifest JSON and writes it to a per-account key
+(`manifests/<researcher-account-id>/manifest.json`) in the Data_Control_Account
+Manifest_Bucket using the Data Control credentials. Regenerates on
+create/revoke/extend/expiry and deletes the object when no active shares remain (Req 7).
+
+The Manifest_Bucket is a single Data Control bucket owned by this project's
+Infrastructure_Stack (Req 7.9, Req 16.5), not a per-researcher bucket. Researchers reach
+their own manifest by cross-account read: the bucket policy grants each onboarded
+Researcher_Account `s3:GetObject` on its own prefix and nothing else, and the researcher's
+own IAM must permit its principals to read it (both sides are required for a cross-account
+read). Consequences for this design:
+
+- **The write is same-account.** The tool writes to a bucket in its own account, so the
+  earlier cross-account-trust failure mode (a missing or wrong researcher bucket policy on
+  the write path) is gone. This strengthens Property 4: the one remaining external
+  dependency on the manifest path — the researcher's *read* grant — is not on the write
+  path at all, so it can never leave a share persisted with a failed manifest write.
+- **The bucket name is configuration sourced from a stack output, not a constant.** The
+  tool resolves the bucket from `manifest.bucket` and the object key from
+  `manifest.keyTemplate` (default `manifests/{accountId}/manifest.json`); `manifest.bucket`
+  is the Infrastructure_Stack output (Req 7.2, Req 16.4). A hard-coded name would drift
+  from the deployment.
+- **The bucket is checked during preflight, before any Share_Record is written**
+  (Req 7.10) — now a same-account `HeadBucket`/put check confirming the stack is deployed,
+  rather than a cross-account probe.
+
+Because the Manifest is descriptive only and never consulted for authorization (Req 7.8),
+holding it in Data Control rather than the researcher account has no security dimension —
+where it lives is purely an operational choice, and a same-account write is the simpler,
+more reliable one.
+
+## Infrastructure
+
+### Repository layout
+
+The repository holds three deliverables in one place: the Go CLI, the Go Lambda handlers
+it talks to, and the CDK app that deploys them.
+
+```
+cmd/                    # Cobra CLI subcommands (share, revoke, extend, list, validate)
+internal/               # CLI and handler logic (auth, warehouse, lattice, manifest, ...)
+functions/              # Lambda main packages (deployable entrypoints)
+  authorization/        #   callout interface, called by htsget-rs
+  admin/                #   admin interface, called by the CLI
+infrastructure/         # CDK app (TypeScript) — Data Control account resources
+docs/                   # operator and administrator documentation (Req 18)
+htsget-rs/              # git-ignored sub-clone of umccr/htsget-rs for the Req 14 contribution
+main.go                 # CLI entrypoint
+```
+
+`functions/` exists because `cmd/` is already the Cobra command package rather than a set
+of `main` packages, and because the Lambda entrypoints must be independently buildable
+artifacts. They contain wiring only — request decoding, client construction, and a call
+into `internal/auth` — so the handler logic has exactly one implementation shared with the
+CLI's tests (Req 16.5).
+
+### Infrastructure_Stack (CDK)
+
+CDK in TypeScript, under `infrastructure/`. TypeScript rather than CDK Go because the
+surrounding UMCCR deployments — including the htsget VPC Lattice provider and consumer
+constructs this system depends on — are CDK TypeScript, so constructs and idioms are
+shared rather than reimplemented.
+
+Resources deployed (Req 16.1):
+
+| Resource | Configuration | Requirement |
+| --- | --- | --- |
+| DynamoDB `ShareRecords` | PK `shareId`; GSI1 PK `targetVpcArn`; GSI2 PK `researcherAccountId` SK `createdAt`; **no TTL** | 16.2, 10.2 |
+| Authorization callout Lambda | from `functions/authorization`; reads GSI1 | 16.5, 4.2 |
+| Admin Lambda | from `functions/admin`; reads/writes table and GSI2 | 16.5, 10.3 |
+| API Gateway REST API + stage | response caching enabled; cache key includes forwarded requester identity | 16.3, 13.3, 13.4 |
+| Lambda execution roles | scoped to the table and the indexes each function actually queries | 16.7 |
+| Manifest_Bucket + bucket policy | single private bucket; per-account key prefix; block public access; policy grants each onboarded researcher `s3:GetObject` on its own prefix; granted accounts are a stack parameter | 16.5, 7.9 |
+| Operator IAM policy | optional; the permissions of Req 11.2 | 16.9 |
+
+Two design constraints worth stating explicitly, because getting them wrong is not
+recoverable by configuration:
+
+- **REST API, not HTTP API.** HTTP APIs have neither response caching nor
+  `FlushStageCache`. Requirement 13.3 depends on the former and Requirement 3.8's
+  `revoke --flush-cache` on the latter, so the API type is forced. The response cache is a
+  provisioned, billed cache instance, and `FlushStageCache` fails if caching is not
+  enabled on the stage — so the cost is not optional either.
+- **No DynamoDB TTL.** Expired and revoked Share_Records must stay queryable for `list`
+  and audit (Req 8.2), so records are never auto-deleted; effective status is derived at
+  read time.
+
+The stack exports the REST API id, stage name, and Manifest_Bucket name as outputs
+(Req 16.4), which are exactly the values `endpoints.apiGatewayRestApiId`,
+`endpoints.apiGatewayStageName`, and `manifest.bucket` in the CLI configuration. Account,
+region, resource naming, and the set of researcher accounts granted manifest read are
+stack parameters so the same source deploys to more than one environment and onboarding a
+researcher is a configuration change (Req 16.5, 16.10).
+
+The stack deliberately provisions nothing outside the Data Control account. In particular
+it does not create any researcher-side resource, any Lake Formation or RAM sharing, or
+htsget-rs itself (Req 16.8) — see "Deployment ownership boundaries". The Manifest_Bucket
+it does create lives in Data Control; researchers only receive cross-account read on it.
 
 ## Data Models
 
@@ -513,6 +669,11 @@ warehouse:                               # OrcaVault Mart via Athena (Lake Forma
 endpoints:
   authorization:   "https://auth.data-control.umccr.org"
   htsgetBaseUrl:   "https://htsget-lattice.data-control.umccr.org"
+  apiGatewayRestApiId: "<rest-api-id>"  # from the Infrastructure_Stack output (Req 16.4)
+  apiGatewayStageName: "prod"           # from the Infrastructure_Stack output
+manifest:                              # Manifest_Bucket in Data Control (Req 7.9); researchers get cross-account read
+  bucket:      "<manifest-bucket>"     # from the Infrastructure_Stack output (Req 16.4)
+  keyTemplate: "manifests/{accountId}/manifest.json"   # per-account object key
 cache:
   ttlCeiling: "1h"      # max-age ceiling (Req 13.1)
   denyTtl:    "60s"     # negative cache (Req 13.2)
@@ -536,10 +697,18 @@ requirements:
   `storage_class` (e.g. `DeepArchive` or a Glacier tier), htsget-rs cannot stream it
   without a restore; report the affected library IDs and archived locations and abort
   before any write (Req 1.7).
-- **Atomicity / partial failure**: a share is only considered created once the
-  `Share_Record` is persisted. Manifest write happens after; if it fails, the share
-  exists but the CLI reports the manifest failure and offers retry rather than rolling
-  back the record. Resolution/preflight failures abort before any write (Req 1.8).
+- **Atomicity / partial failure**: everything that can be checked is checked before the
+  `Share_Record` is persisted — lattice/RAM association (Req 5), library resolution and
+  archived-storage refusal (Req 1.6, 1.7), and Manifest_Bucket existence and writability
+  (Req 7.10). Once those pass, the record is written and the manifest follows. A manifest
+  write that still fails at that point leaves the share in place; the CLI reports the
+  manifest failure and offers retry rather than rolling back the record, since the share
+  is authoritative and the manifest is a derived artifact (Req 7.8). Moving the bucket
+  check into preflight is what keeps this consistent with Property 4 (Req 1.8).
+- **Missing external prerequisite** (Manifest_Bucket absent, RAM share not accepted,
+  Lake Formation resource link missing, DynamoDB table or API Gateway stage not deployed):
+  report which prerequisite is unmet and which account owns it, rather than the raw AWS
+  error, and point at the deployment that provides it (Req 17.7).
 - **Connectivity failures** (OrcaVault Mart via Athena / Lake Formation, Authorization
   Service, RAM/VPC Lattice APIs unreachable, or an Athena query completing in a
   non-success state): identify the failed component and abort without partial state
@@ -655,8 +824,38 @@ grant.
   given, lattice/RAM association and a genuine in-VPC request via the `Test_Lambda`. The
   optional `--test-setup` canary mode exercises the full share path (create synthetic
   share -> invoke Test_Lambda -> clean up).
+- **Infrastructure tests (Req 16)**: CDK assertion tests on the synthesised template —
+  that the table carries both GSIs and no TTL, that the API is a REST API with caching
+  enabled on the stage and the requester identity in the cache key, that execution roles
+  grant no more than the handlers need, and that the REST API id and stage name are
+  exported as outputs.
 - **Security-sensitive checks**: verify fail-closed authorization, per-researcher cache
   isolation, and that no secrets are logged or written to config.
+
+## Documentation
+
+Documentation is a deliverable, not a byproduct (Req 18). It lives in `docs/` with a
+top-level `README.md` as the entry point, and is organised around the three questions an
+operator actually arrives with.
+
+| Document | Answers | Requirement |
+| --- | --- | --- |
+| `README.md` | What is this, what are the accounts, how do the pieces relate | 18.1 |
+| `docs/usage.md` | How do I run each command, with flags, examples, and exit codes | 18.2 |
+| `docs/configuration.md` | Every config field, defaults, flag precedence, search paths, annotated example | 18.3 |
+| `docs/deployment.md` | How to deploy the Infrastructure_Stack, and how its outputs map to config | 18.4 |
+| `docs/prerequisites.md` | Per-account checklist of what this project assumes exists, and who owns each item | 18.5, Req 17 |
+| `docs/onboarding.md` | How to onboard a Researcher_Account, ending in a `validate` run | 18.6 |
+| `docs/operations.md` | Cache-bounded revocation, immutable library sets, idempotency, ~1 day warehouse lag | 18.7 |
+| `docs/manifest.md` | Manifest schema, location, and that it is descriptive only | 18.8 |
+
+Two documentation obligations are structural rather than editorial. The prerequisites
+checklist is derived from the "Deployment ownership boundaries" table, so the two must not
+drift. And the operational caveats in `docs/operations.md` are the ones an administrator
+cannot infer from the CLI's own output — particularly that a revoke is bounded by
+Cache_TTL rather than immediate, and that `--flush-cache` narrows that window without
+closing it. Documentation is updated in the same change as the behaviour it describes
+(Req 18.10).
 
 ## Future Directions
 
@@ -803,3 +1002,4 @@ is retained.
 **When it's worth it.** Overkill for whole-library and simple region/format grants. It
 earns its keep once any two of {exclusions, consent/DUO conditions, identity-attribute
 conditions} are needed, at which point it delivers them in one validated model.
+nt it delivers them in one validated model.
