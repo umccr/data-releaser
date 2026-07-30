@@ -14,14 +14,11 @@ import (
 	"github.com/umccr/data-releaser/internal/model"
 )
 
-// ManifestKey is the well-known S3 object key where the manifest is stored
-// in each researcher's bucket.
-const ManifestKey = "data-releaser/manifest.json"
-
-// Writer handles uploading and deleting manifests in researcher S3 buckets.
-// It uses the Data Control account credentials; cross-account access relies on
-// the researcher bucket policy granting the Data Control account write/delete
-// permissions (Req 11.5).
+// Writer handles uploading and deleting manifests in the Data Control Manifest_Bucket.
+// It uses the Data Control account credentials and performs a same-account write to the
+// single Manifest_Bucket, storing each researcher's manifest under a per-account key
+// (Req 7.9). Researcher access is read-only and cross-account, granted by the bucket
+// policy — the Writer never grants access.
 type Writer struct {
 	s3Client internalaws.S3Client
 }
@@ -33,11 +30,28 @@ func NewWriter(s3Client internalaws.S3Client) *Writer {
 	}
 }
 
-// Upload serializes the manifest to JSON and writes it to the well-known key
-// in the researcher's S3 bucket using PutObject with ContentType "application/json".
+// VerifyBucketWritable confirms the configured Manifest_Bucket exists and is accessible
+// to the Data Control identity via a HeadBucket call. A HeadBucket success confirms
+// existence and basic access; writability is conferred by the same-account identity's
+// IAM (the Manifest write is a same-account write). This is used as a share preflight
+// check so a share is never persisted only to fail on the subsequent manifest upload.
+//
+// Requirements: 7.10, 17.7, 1.8
+func (w *Writer) VerifyBucketWritable(ctx context.Context, bucket string) error {
+	_, err := w.s3Client.HeadBucket(ctx, &s3.HeadBucketInput{
+		Bucket: aws.String(bucket),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to access manifest bucket %q: %w", bucket, err)
+	}
+	return nil
+}
+
+// Upload serializes the manifest to JSON and writes it to the per-account key in the
+// Data Control Manifest_Bucket using PutObject with ContentType "application/json".
 //
 // Requirements: 7.2
-func (w *Writer) Upload(ctx context.Context, bucket string, manifest *model.Manifest) error {
+func (w *Writer) Upload(ctx context.Context, bucket, key string, manifest *model.Manifest) error {
 	data, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to serialize manifest: %w", err)
@@ -45,28 +59,28 @@ func (w *Writer) Upload(ctx context.Context, bucket string, manifest *model.Mani
 
 	_, err = w.s3Client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:      aws.String(bucket),
-		Key:         aws.String(ManifestKey),
+		Key:         aws.String(key),
 		Body:        bytes.NewReader(data),
 		ContentType: aws.String("application/json"),
 	})
 	if err != nil {
-		return fmt.Errorf("failed to upload manifest to s3://%s/%s: %w", bucket, ManifestKey, err)
+		return fmt.Errorf("failed to upload manifest to s3://%s/%s: %w", bucket, key, err)
 	}
 
 	return nil
 }
 
-// Delete removes the manifest from the researcher's S3 bucket.
+// Delete removes the manifest from the Manifest_Bucket at the per-account key.
 // This is called when no active shares remain for the account (Req 7.4).
 //
 // Requirements: 7.3, 7.4
-func (w *Writer) Delete(ctx context.Context, bucket string) error {
+func (w *Writer) Delete(ctx context.Context, bucket, key string) error {
 	_, err := w.s3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
 		Bucket: aws.String(bucket),
-		Key:    aws.String(ManifestKey),
+		Key:    aws.String(key),
 	})
 	if err != nil {
-		return fmt.Errorf("failed to delete manifest from s3://%s/%s: %w", bucket, ManifestKey, err)
+		return fmt.Errorf("failed to delete manifest from s3://%s/%s: %w", bucket, key, err)
 	}
 
 	return nil
@@ -74,12 +88,12 @@ func (w *Writer) Delete(ctx context.Context, bucket string) error {
 
 // Sync uploads or deletes the manifest based on whether active shares exist.
 // If manifest is nil (no active shares), the manifest is deleted from the bucket.
-// If manifest is non-nil, it is uploaded to the well-known key.
+// If manifest is non-nil, it is uploaded to the per-account key.
 //
 // Requirements: 7.2, 7.3, 7.4, 11.5
-func (w *Writer) Sync(ctx context.Context, bucket string, manifest *model.Manifest) error {
+func (w *Writer) Sync(ctx context.Context, bucket, key string, manifest *model.Manifest) error {
 	if manifest == nil {
-		return w.Delete(ctx, bucket)
+		return w.Delete(ctx, bucket, key)
 	}
-	return w.Upload(ctx, bucket, manifest)
+	return w.Upload(ctx, bucket, key, manifest)
 }

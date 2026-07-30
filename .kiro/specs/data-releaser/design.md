@@ -31,10 +31,16 @@ The design centers on five decisions established during requirements analysis:
    shareable reads. The grant prefix is derived from the parent prefix of each resolved
    `.bam` key. This replaces the previous two-hop OrcaBus API resolution and removes the
    dependency on the Workflow Manager, Filemanager, and the OrcaBus JWT (Req 1).
-4. **Dynamic authorization with bounded caching.** htsget-rs calls the Authorization
-   Service at request time, but reuses decisions through two cache layers to avoid a
-   callout per request. Expiry is made precise via `max-age`; revocation is bounded by
-   cache TTL and can be accelerated by a cache flush (Req 4, 13, 14).
+4. **Dynamic authorization with one standards-governed cache.** htsget-rs calls the
+   Authorization Service at request time and reuses decisions through exactly one cache:
+   the standard HTTP response cache that already sits on the callout client, governed by
+   the RFC 9111 `Cache-Control` directives the Authorization Service emits (RFC 9111
+   obsoleted RFC 7234) together with the cache key the callout client explicitly declares.
+   The Authorization Service owns freshness and the `Vary` it declares; the htsget-rs
+   deployment owns the cache key (hence per-requester isolation), the TTL ceiling, and the
+   storage substrate. Nothing is
+   externally flushable, so the Cache_TTL ceiling is itself the revocation SLA
+   (Req 4, 13, 14).
 5. **This project deploys what it operates, and nothing else.** The Authorization
    Service Lambdas, their DynamoDB table, the API Gateway in front of them, and the
    Manifest_Bucket are deployed from this repository as a CDK application (Req 16).
@@ -67,10 +73,10 @@ flowchart LR
 
     subgraph DC["Data Control Account (916218008751)"]
         ATHENA["Athena<br/>(mart resource-link DB)"]
-        APIGW["API Gateway<br/>(response cache - Layer 1)"]
+        APIGW["API Gateway<br/>(Authorization_Service front door)"]
         AUTH["Authorization_Service<br/>(Lambda)"]
         DDB[("DynamoDB<br/>Share_Records")]
-        HTS["Htsget_Rs (Lambda)<br/>in-process cache - Layer 2"]
+        HTS["Htsget_Rs (Lambda)<br/>callout HTTP response cache"]
         LATTICE{{"VPC Lattice<br/>service network"}}
         S3MAN[("S3 Manifest_Bucket<br/>per-account prefix")]
     end
@@ -120,7 +126,7 @@ prerequisite checklist from it (Req 18.5).
 | --- | --- | --- |
 | Authorization_Service Lambdas (callout + admin) | Data Control | **This repo** (`infrastructure/`) |
 | DynamoDB `ShareRecords` table and its two GSIs | Data Control | **This repo** |
-| API Gateway REST API, stage, and response cache | Data Control | **This repo** |
+| API Gateway REST API and stage | Data Control | **This repo** |
 | Lambda execution roles for the above | Data Control | **This repo** |
 | Manifest_Bucket and its cross-account read bucket policy | Data Control | **This repo** |
 | Operator/admin IAM policy (Req 11.2) | Data Control | **This repo** (optional; never by the CLI at runtime) |
@@ -185,7 +191,7 @@ sequenceDiagram
 
 ### Key flow: authorization at request time
 
-Covers Req 4 (callout), Req 13 (caching), Req 14 (in-process cache), Req 6
+Covers Req 4 (callout), Req 13 (caching), Req 14 (callout-client cache), Req 6
 (cross-account data), and revocation/expiry behavior (Req 2, 3).
 
 ```mermaid
@@ -194,8 +200,8 @@ sequenceDiagram
     participant Cons as Researcher (Seqera)
     participant Lattice as VPC Lattice
     participant HTS as Htsget_Rs
-    participant L2 as In-process cache (Layer 2)
-    participant APIGW as API Gateway cache (Layer 1)
+    participant CACHE as Authorization_Cache<br/>(HTTP response cache on the callout client)
+    participant APIGW as API Gateway
     participant Auth as Authorization_Service
     participant DDB as DynamoDB
     participant S3 as Data Account S3
@@ -203,22 +209,18 @@ sequenceDiagram
     Cons->>Lattice: htsget request (reads/variants)
     Lattice->>HTS: forward request (source VPC ARN)
 
-    HTS->>L2: cached decision for requester identity?
-    alt L2 hit (within max-age)
-        L2-->>HTS: allow rules (no callout)
-    else L2 miss/expired
-        HTS->>APIGW: auth callout (forward VPC ARN)
-        alt Layer 1 hit (within max-age)
-            APIGW-->>HTS: cached response
-        else Layer 1 miss
-            APIGW->>Auth: callout
-            Auth->>DDB: query active shares for VPC ARN
-            DDB-->>Auth: matching (non-expired, non-revoked) shares
-            Note over Auth: Cache-Control max-age =<br/>min(remaining lifetime, ceiling).<br/>Deny → short TTL (negative cache)
-            Auth-->>APIGW: htsgetAuth rules (or empty = deny)
-            APIGW-->>HTS: response (cached per max-age)
-        end
-        HTS->>L2: store decision (bounded by max-age)
+    HTS->>CACHE: stored response under this identity's declared cache key?
+    alt fresh stored response (within s-maxage and the request-side ceiling)
+        CACHE-->>HTS: allow rules (no callout)
+    else absent, stale, or older than the ceiling
+        HTS->>APIGW: auth callout (forwarded headers;<br/>request Cache-Control: max-age = the TTL ceiling)
+        APIGW->>Auth: invoke
+        Auth->>DDB: query active shares for VPC ARN
+        DDB-->>Auth: matching (non-expired, non-revoked) shares
+        Note over Auth: allow → Cache-Control: s-maxage = min remaining<br/>lifetime, public + Vary over forwarded headers<br/>(revalidation cross-check, not isolation).<br/>deny → short explicit max-age.<br/>no safe lifetime → no-store
+        Auth-->>APIGW: htsgetAuth rules (or empty = deny)
+        APIGW-->>HTS: response with an explicit directive
+        HTS->>CACHE: store under the declared identity key, and only if<br/>public/s-maxage and a sufficient Vary are present<br/>(else fail closed)
     end
 
     alt authorized (non-empty htsgetAuth)
@@ -229,7 +231,7 @@ sequenceDiagram
         HTS-->>Cons: 401/403 unauthorized
     end
 
-    Note over Auth,APIGW: Revocation (Req 3): mark revoked and<br/>flush stage cache. Propagation bounded by<br/>Cache_TTL (or Layer 2 short cap)
+    Note over Auth,CACHE: Revocation (Req 3): the Share_Record is marked revoked<br/>immediately and durably; nothing is flushed. Observation is<br/>bounded by the Cache_TTL ceiling, which is the revocation SLA
 ```
 
 ### Design decisions and rationale
@@ -270,11 +272,15 @@ sequenceDiagram
   under the same prefix as the `.bam`, so index sidecars are covered by the same grant.
   This prefix is narrower than a whole-run output prefix, avoiding over-granting.
   Per-object grants would risk excluding indexes and break htsget. (Req 1.4)
-- **Two cache layers with different TTL policies.** The API Gateway cache (Layer 1) is
-  externally flushable; the htsget-rs in-process cache (Layer 2) is not. `max-age` is
-  set to the exact remaining share lifetime so natural expiry is precise; revocation is
-  handled by flushing Layer 1, with Layer 2 given a short cap so warm containers pick up
-  the change quickly. (Req 3, 13; see "Caching model" below.)
+- **One cache, with responsibilities split by who owns the knowledge.** There is exactly
+  one authorization cache: the standard HTTP response cache on the htsget-rs callout
+  client. The Authorization_Service owns freshness and `Vary`, because only it knows share
+  lifetimes and its own decision inputs; the htsget-rs deployment, as cache operator, owns
+  the cache key, the TTL ceiling, and the storage substrate. Natural expiry is precise
+  because `s-maxage` is the minimum remaining share lifetime; revocation propagates as
+  entries expire.
+  Nothing is externally invalidatable, so the ceiling is the revocation SLA rather than a
+  performance knob. (Req 3, 13; see "Caching model" below.)
 - **Dynamic callout retained; static authorization deferred.** Per-researcher isolation
   is enforced at the authorization-decision layer (the callout returns only the caller's
   locations), which the current single global static file cannot express.
@@ -289,19 +295,58 @@ sequenceDiagram
 
 ### Caching model
 
-The staleness bound on a revoked share is `min(share remaining lifetime at cache time,
-Cache_TTL ceiling)`; for unlimited or long-lived shares this equals the ceiling
-(default 1h, configurable up to 24h). Two independent policies apply:
+There is exactly one authorization cache — the Authorization_Cache: the standard HTTP
+response cache on the htsget-rs authorization callout client, governed entirely by
+RFC 9111 (which obsoleted RFC 7234). No API Gateway response cache is used and no cache
+is externally invalidatable, so a revoke is never accelerated by a flush: the Share_Record
+is marked revoked immediately and durably, and only its *observation* by htsget-rs is
+delayed (Req 3.8).
 
-- **Layer 1 (API Gateway)**: TTL aligned to `max-age` (up to the ceiling). Flushable via
-  `flushStageCache` on revoke for near-immediate propagation.
-- **Layer 2 (htsget-rs in-process)**: short hard cap independent of `max-age`, because it
-  cannot be externally invalidated; also bounded by warm-container lifetime.
+Because one htsget-rs instance serves many requesters, the Authorization_Cache is a
+**shared** cache in RFC 9111 terms, not a private one. That is what brings §3.5 into play:
+a shared cache may not reuse a response to a request carrying an `Authorization` header
+unless the response explicitly opts in, which is why the allow path emits `public` and
+`s-maxage` rather than a bare `max-age`.
 
-To keep the total bound at the ceiling rather than compounding, Layer 1 must emit the
-HTTP `Age` header and Layer 2 must honor it when computing remaining freshness
-(implementation constraint for Req 14). Correctness never depends on any cache being
-present — every layer falls back to a fresh callout (Req 13.10).
+Responsibilities are split by who owns the relevant knowledge:
+
+- **The Authorization_Service owns freshness and `Vary`.** On allow it emits
+  `Cache-Control: s-maxage=<n>, public` where `<n>` is the minimum remaining lifetime
+  among the matched active Share_Records (the ceiling value for unlimited shares); on deny
+  it emits a short explicit `max-age` (default 60s) so newly created shares appear
+  promptly; where no safe lifetime is determinable it emits `no-store`. Every response
+  carries an explicit directive, and it emits a `Vary` listing every forwarded request
+  header its decision depends on — which serves as a revalidation cross-check and satisfies
+  the fail-closed storage precondition, never as the isolation mechanism (Req 13.1–13.4).
+- **The htsget-rs deployment owns the cache key, the ceiling, and the storage substrate.**
+  It declares the cache key that isolates entries per requester (see below). The ceiling is
+  applied as a request-side `Cache-Control: max-age=<ceiling>` on the callout — the
+  RFC 9111 mechanism for a client refusing a stored response older than a given age —
+  rather than by bespoke clamping of the response directives (Req 13.5, 14.3).
+
+Two consequences follow, and they are the invariants the implementation must preserve:
+
+- **Isolation is key-based, not `Vary`-based.** Per-requester isolation rests on the cache
+  key the callout client explicitly declares, incorporating the hashed forwarded identity
+  headers, so distinct identities occupy distinct cache entries and isolation is structural
+  (Req 14.4). It cannot rest on `Vary`: the callout response cache implements no
+  `Vary`-based secondary cache keying — `Vary` is evaluated only during conditional
+  revalidation, where a mismatch triggers a refetch that overwrites the same entry, so it
+  yields revalidation rather than separate entries. The fail-closed store precondition
+  remains, as defence in depth: a response that does not explicitly permit shared reuse, or
+  that does not declare a `Vary` covering the forwarded identity headers, is not stored at
+  all (Req 13.3, 13.6). No AWS-specific notion such as a source VPC ARN appears in the
+  cache mechanism.
+- **A cache may narrow what the origin permitted, never widen it.** Heuristic freshness
+  (RFC 9111 §4.2.2) is never applied to an authorization decision; a response with no
+  explicit directive is treated as non-cacheable (Req 13.7, 13.8, 14.5).
+
+The staleness bound on a revoked or expired share is therefore `min(share remaining
+lifetime at store time, Cache_TTL ceiling)`; for unlimited or long-lived shares this
+equals the ceiling (default 1h, maximum 24h). The ceiling is chosen as a deliberate
+security decision recording the accepted revocation latency (Req 13.11). Correctness never
+depends on the cache being present — an absent or unavailable cache degrades to a fresh
+callout, never to an allow (Req 13.10).
 
 ## Components and Interfaces
 
@@ -312,7 +357,7 @@ The top-level tool, written in Go. Subcommands map directly to requirements:
 | Command | Purpose | Requirements |
 | --- | --- | --- |
 | `share --libraries <ids> --account <id> [--expiry <dur>]` | Resolve, record, and deliver a share | 1, 2, 7, 12 |
-| `revoke <share-id> [--flush-cache]` | Mark a share revoked; optionally flush Layer 1 | 3 |
+| `revoke <share-id>` | Mark a share revoked; propagation bounded by the Cache_TTL ceiling | 3 |
 | `extend <share-id> --duration <dur>` | Update expiry of an active share | 9 |
 | `list [--account <id>]` | Audit shares | 8 |
 | `validate [--account <id>] [--test-setup]` | Preflight / end-to-end infra check | 15 |
@@ -337,7 +382,8 @@ That identity must carry the permissions for everything the tool does (Req 11.2)
   `GetQueryResults`, Glue/Lake Formation catalog read on the `mart` resource-link database,
   and read of the Athena workgroup S3 results location.
 - **Share management** — read/write `Share_Record`s (DynamoDB via the Authorization
-  Service), manage VPC Lattice / RAM, and flush the API Gateway cache.
+  Service) and manage VPC Lattice / RAM. No cache-invalidation permission is required,
+  because no externally invalidatable cache exists (Req 3.8).
 - **Manifest delivery** — same-account `s3:PutObject`/`s3:DeleteObject` on the Data
   Control Manifest_Bucket, and `lambda:InvokeFunction` on the researcher `Test_Lambda` for
   validation. The manifest write needs no external trust (it is same-account); only the
@@ -386,14 +432,15 @@ data.
 
 ### Authorization_Service
 
-An AWS Lambda behind API Gateway (REST API, caching enabled) in the Data Control
+An AWS Lambda behind API Gateway (REST API) in the Data Control
 account, backed by DynamoDB (Req 10). Two logical interfaces:
 
 1. **Admin interface (used by the CLI via the Data Control role):** create, revoke,
    extend, and list `Share_Record`s. Write path validated and owned by Data Control.
 2. **Authorization callout interface (used by htsget-rs):** given the source VPC ARN,
    return an `AuthorizationRestrictions` document for all active shares matching that
-   ARN, with a `Cache-Control` header per Req 13.1/13.2.
+   ARN, together with the `Cache-Control` and `Vary` headers of Req 13.1–13.4 — the
+   service is the freshness authority for the Authorization_Cache.
 
 The callout response conforms to the htsget-rs schema (version 1). Each entry has a
 `location` and an optional `rules` array of Access_Rules (see "Access_Rule sub-schema"
@@ -422,35 +469,86 @@ structure is in place for future region- or format-restricted shares.
 
 htsget-rs is configured with `[auth.authorization]` `kind = "callout"` pointing at the
 Authorization Service, and with S3 locations referencing the Data Account bucket and
-the Data Control cross-account role (Req 6). The callout client is enhanced (Req 14) to
-cache responses in-process keyed on requester identity, honoring `Cache-Control:
-max-age` (and `Age`), with a configurable enable/disable and TTL cap. This change lands
-in the UMCCR htsget-rs repo and is separately tested.
+the Data Control cross-account role (Req 6).
+
+**The callout client already caches.** No cache has to be added. `HttpClient::as_inner_built()`
+in `htsget-config/src/config/advanced/mod.rs` wraps the `reqwest` client in the
+`http-cache-reqwest` `Cache` middleware — `HttpCache { mode: CacheMode::Default, manager:
+CACacheManager::new(temp_dir().join("htsget_rs_client_cache"), false), options:
+HttpCacheOptions::default() }` — whenever the HTTP client's `use_cache` flag is set, and
+`use_cache` on `HttpClientConfig` defaults to `true`. `Auth::fetch_from_callout` in
+`htsget-http/src/middleware/auth.rs` performs the authorization callout through exactly
+that client, so authorization responses are already being cached with RFC 9111 semantics
+(`http-cache-semantics`). The Req 14 contribution therefore *re-founds* the existing cache
+on standards-native behaviour rather than introducing a second one. `http-cache-reqwest`
+and `reqwest-middleware` are direct dependencies of `htsget-config`, and `http-cache`,
+`http-cache-semantics`, and `cacache` already arrive with them in the lock file;
+**no new dependency is needed** — in particular no TTL-cache crate, because
+`http-cache` already ships an in-memory manager.
+
+**It is a shared cache.** One htsget-rs instance serves many requesters, so the cache is a
+*shared* cache in RFC 9111 terms, not a private one — and it already is one:
+`CacheOptions::default()` sets `shared: true`. That classification is what brings §3.5
+(reuse of a response to a request bearing an `Authorization` header) and the `s-maxage`
+directive into play — the freshness half of the Req 13 model. It does *not* bring secondary
+cache keys into play: the middleware implements no `Vary`-based secondary keying, so
+per-requester isolation comes from the explicitly declared cache key instead (below).
+Shared-versus-private treatment is therefore settled by the crate's own default rather than
+left as an open question for upstream.
 
 The upstream integration points, as of `umccr/htsget-rs` at the time of writing, are:
 
 | Upstream location | Role in the change |
 | --- | --- |
-| `htsget-config/src/config/advanced/callout.rs` | `Callout { url, http, forward }` — the cache config (`enabled`, `max_ttl`) is added here, so caching becomes available to both auth and url-storage callouts |
-| `htsget-config/src/config/advanced/auth/authorization.rs` | `AuthorizationSource::Callout \| Static` — unchanged, but the callout arm is what gains caching |
-| `htsget-config/src/config/advanced/auth/response.rs` | `AuthorizationRestrictions` — the type the cache stores; no local duplicate is introduced |
-| `htsget-http/src/middleware/auth.rs` | `Auth::query_authorization_service` and `Auth::fetch_from_callout` — the cache lookup wraps the former; the latter must be adjusted to read `Cache-Control`/`Age` from the response headers before the body is consumed |
+| `htsget-config/src/config/advanced/mod.rs` | `HttpClient::as_inner_built()` — where the `http-cache-reqwest` `Cache` middleware is already attached; where the store choice, the shared-cache treatment, and the declared `HttpCacheOptions.cache_key` are settled |
+| `htsget-config/src/config/advanced/callout.rs` | `Callout { url, http, forward }` — carries the `HttpClient` (hence `use_cache`) and the `forward` config whose header set both the declared cache key and the origin's `Vary` are derived from |
+| `htsget-config/src/config/advanced/auth/authorization.rs` | `AuthorizationSource::Callout \| Static` — unchanged; the callout arm is the one whose cache behaviour is being pinned down |
+| `htsget-config/src/config/advanced/auth/response.rs` | `AuthorizationRestrictions` — the deserialised type; no local duplicate and no bespoke cache entry type is introduced |
+| `htsget-http/src/middleware/auth.rs` | `Auth::query_authorization_service`, `Auth::fetch_from_callout`, and `Auth::forwarded_headers` — the callout path that emits the request-side ceiling directive and produces the forwarded header set |
 
-Three constraints follow from that shape and govern the implementation:
+Constraints that follow from that shape and govern the implementation:
 
-- **The response headers are currently discarded.** `fetch_from_callout` goes straight to
-  `response.json()`, so `Cache-Control` and `Age` are unavailable to a caller. Honoring
-  them (Req 14.2) requires reading `response.headers()` first. This is the only change to
-  existing upstream behaviour and should be made without altering the public signature.
-- **The cache key must be deployment-neutral.** Keying on "source VPC ARN" is an AWS
-  specific notion that does not belong in htsget-rs. The upstream-appropriate key is the
-  callout URL plus the forwarded header set that `Auth::forwarded_headers` already
-  produces — which, in this deployment, contains the VPC ARN. Per-identity isolation
-  (Req 14.5, Property 2) is preserved without AWS semantics leaking upstream.
-- **No new dependency is assumed.** A TTL cache crate (`moka`) is the natural
-  implementation, but it would be a new upstream dependency; a `RwLock<HashMap>` with
-  manual TTL using crates already present is the fallback. This is settled with upstream
-  maintainers before the change is written, not after.
+- **Treat the cache as shared, and let the directives do the work.** The freshness
+  directives the Authorization_Service emits (`s-maxage`, `public`, `no-store`) are honoured
+  by the middleware itself; `Vary` is honoured there too, but only during conditional
+  revalidation, where a mismatch yields a stale outcome that refetches and overwrites the
+  entry. `fetch_from_callout` does **not** need to read `Cache-Control` or `Age` before
+  consuming the body, and no such change is made. Reading
+  response headers by hand would duplicate `http-cache-semantics` and invite divergence.
+- **Apply the ceiling as a request directive.** The configured Cache_TTL ceiling is emitted
+  as `Cache-Control: max-age=<ceiling>` on the callout request — the RFC 9111 mechanism by
+  which a client refuses a stored response older than a given age — rather than by bespoke
+  clamping of the response `max-age` (Req 14.3).
+- **Fail closed on storage.** A response is not stored unless it explicitly permits shared
+  reuse (`public`, `s-maxage`, or `must-revalidate`) and declares a `Vary` covering the
+  forwarded identity headers — a defence-in-depth precondition, not the isolation mechanism
+  (Req 13.6). Under `CacheMode::Default` a response with no explicit `Cache-Control` is
+  treated as non-cacheable, and heuristic freshness
+  (RFC 9111 §4.2.2) is never applied to an authorization decision (Req 14.5).
+- **Isolation is deployment-neutral by construction.** Keying on "source VPC ARN" is an AWS
+  notion that must not leak into htsget-rs, and it does not need to: isolation rests on an
+  explicitly declared `HttpCacheOptions.cache_key` derived — hashed — from the header set
+  `Auth::forwarded_headers` already produces, which in this deployment is what carries the
+  VPC ARN. The key is a `Fn(&http::request::Parts) -> String`, so it sees the whole request
+  including headers; hashing the identity component keeps credentials out of key material,
+  which matters because under a disk-backed store the key becomes a filename. Declaring it
+  is necessary, not merely preferable: the default key is `format!("{}:{}", method,
+  parts.uri)` — method and URI only, no headers — while the callout `url` is a single static
+  `Uri` with identity travelling in forwarded headers, so by default every requester shares
+  one entry. The caveat is that a declared key *replaces* the default rather than composing
+  with it, so it must carry the method/URI distinction itself. Per-identity isolation
+  (Req 14.4, Property 2) is therefore structural rather than origin-declared, with no AWS
+  semantics upstream.
+- **Prefer an in-memory store.** The default `CACacheManager` persists authorization
+  decisions into a shared temp directory; an in-memory manager is preferred because these
+  decisions are cheap to refetch and short-lived, and durability here is only blast radius
+  (Req 14.6).
+- **`use_cache` remains the sole toggle.** No duplicate enable/disable and no bespoke
+  per-callout cache-enable or TTL-cap configuration block is added; policy should instead be
+  scopable per callout kind so the authorization callout, url-storage callouts, and JWKS
+  retrieval can differ (Req 14.7, 14.8).
+
+This change lands in the UMCCR htsget-rs repo and is separately tested (Req 14.10).
 
 ### Manifest writer
 
@@ -524,7 +622,7 @@ Resources deployed (Req 16.1):
 | DynamoDB `ShareRecords` | PK `shareId`; GSI1 PK `targetVpcArn`; GSI2 PK `researcherAccountId` SK `createdAt`; **no TTL** | 16.2, 10.2 |
 | Authorization callout Lambda | from `functions/authorization`; reads GSI1 | 16.5, 4.2 |
 | Admin Lambda | from `functions/admin`; reads/writes table and GSI2 | 16.5, 10.3 |
-| API Gateway REST API + stage | response caching enabled; cache key includes forwarded requester identity | 16.3, 13.3, 13.4 |
+| API Gateway REST API + stage | deployed stage; identifier and stage name exported as outputs | 16.3, 16.4 |
 | Lambda execution roles | scoped to the table and the indexes each function actually queries | 16.7 |
 | Manifest_Bucket + bucket policy | single private bucket; per-account key prefix; block public access; policy grants each onboarded researcher `s3:GetObject` on its own prefix; granted accounts are a stack parameter | 16.5, 7.9 |
 | Operator IAM policy | optional; the permissions of Req 11.2 | 16.9 |
@@ -532,11 +630,15 @@ Resources deployed (Req 16.1):
 Two design constraints worth stating explicitly, because getting them wrong is not
 recoverable by configuration:
 
-- **REST API, not HTTP API.** HTTP APIs have neither response caching nor
-  `FlushStageCache`. Requirement 13.3 depends on the former and Requirement 3.8's
-  `revoke --flush-cache` on the latter, so the API type is forced. The response cache is a
-  provisioned, billed cache instance, and `FlushStageCache` fails if caching is not
-  enabled on the stage — so the cost is not optional either.
+- **REST API, not HTTP API.** The API type is *not* driven by caching: authorization
+  response caching sits entirely in the htsget-rs callout client (Req 13, 14), so it places
+  no constraint on the API type, and no response cache cluster is provisioned or billed
+  here. The REST API is retained for continuity with the already-specified configuration
+  and validation surface — the stack outputs the CLI consumes
+  (`endpoints.apiGatewayRestApiId`, `endpoints.apiGatewayStageName`; Req 16.4) and the
+  `validate` check that the named REST API stage exists (Req 15.10) — which is exactly the
+  continuity Req 16.3 requires. Switching to an HTTP API would churn both surfaces for no
+  gain.
 - **No DynamoDB TTL.** Expired and revoked Share_Records must stay queryable for `list`
   and audit (Req 8.2), so records are never auto-deleted; effective status is derived at
   read time.
@@ -675,8 +777,10 @@ manifest:                              # Manifest_Bucket in Data Control (Req 7.
   bucket:      "<manifest-bucket>"     # from the Infrastructure_Stack output (Req 16.4)
   keyTemplate: "manifests/{accountId}/manifest.json"   # per-account object key
 cache:
-  ttlCeiling: "1h"      # max-age ceiling (Req 13.1)
-  denyTtl:    "60s"     # negative cache (Req 13.2)
+  ttlCeiling: "1h"      # Cache_TTL ceiling, max 24h; enforced by the htsget-rs deployment as a
+                        # request-side `Cache-Control: max-age` (Req 13.5) — recorded here only so
+                        # `revoke` can report the propagation bound / revocation SLA (Req 3.8, 13.11)
+  denyTtl:    "60s"     # explicit short max-age the Authorization_Service emits on deny (Req 13.2)
 validation:
   canary:               # optional (Req 15.6)
     libraryId: "..."
@@ -719,8 +823,8 @@ requirements:
   (Req 11.6).
 - **Authorization callout failures (runtime, in htsget-rs)**: fail-closed — deny on
   cache miss when the Authorization Service is unreachable or the response is malformed
-  (Req 4.5, 4.6). Cache-layer unavailability degrades to a fresh callout, never to an
-  allow (Req 13.10).
+  (Req 4.5, 4.6). An absent or unavailable Authorization_Cache degrades to a fresh
+  callout, never to an allow (Req 13.10).
 - **Cross-account data access failures (htsget-rs -> Data Account S3)**: return a generic
   "file unavailable" to the researcher without leaking account/policy detail (Req 6.3).
 - **State-conflict errors** (revoke/extend on an already-revoked or expired share,
@@ -743,17 +847,23 @@ request. Any error, malformed response, or absent cache yields denial, never acc
 
 ### Property 2: Per-researcher isolation
 
-An authorization decision is never shared across Researcher_Accounts; every cache layer
-keys on the requester identity, so one researcher can never receive another's access.
+An authorization decision is never shared across Researcher_Accounts. The mechanism is the
+explicitly declared cache key incorporating the hashed forwarded identity headers, so
+distinct identities occupy distinct cache entries and isolation is structural; the
+fail-closed store precondition — a response that does not explicitly permit shared reuse,
+or that does not declare a `Vary` covering the forwarded identity headers, is not stored at
+all — stands behind it as defence in depth. Isolation does not rest on `Vary`, and no source
+VPC ARN participates. One researcher can therefore never receive another's access.
 
-**Validates: Requirements 13.3, 13.9**
+**Validates: Requirements 13.6, 13.9, 14.4**
 
 ### Property 3: Caches never widen access
 
-A cache may only make a decision staler, never turn a deny into an allow; correctness
-holds with all caches removed.
+A cache may only make a decision staler, never turn a deny into an allow; a cache may
+narrow what the origin permitted and never widen it, and correctness holds with the cache
+removed.
 
-**Validates: Requirements 13.10**
+**Validates: Requirements 13.8, 13.10**
 
 ### Property 4: No partial shares
 
@@ -776,10 +886,10 @@ Errors surfaced to researchers never reveal internal account, path, or policy de
 
 ### Property 7: Bounded revocation
 
-After a revoke, access is denied within the Cache_TTL ceiling, or immediately if the
-Authorization_Cache is flushed.
+After a revoke, access is denied within the Cache_TTL ceiling. There is no flush and
+nothing is externally invalidatable, so the ceiling is itself the revocation SLA.
 
-**Validates: Requirements 3.2, 3.8, 13.1**
+**Validates: Requirements 3.2, 3.8, 13.1, 13.11**
 
 ### Property 8: Bounded expiry
 
@@ -808,15 +918,20 @@ grant.
   bam-only `format` filter, prefix derivation from the `.bam` `key`, no-shareable-reads
   detection (a library ID with no `format = 'bam'` rows in `mart.bam`),
   archived-`storage_class` refusal), idempotency set-matching
-  (Req 12), manifest generation/schema (Req 7.6), `max-age` computation (Req 13.1/13.2),
+  (Req 12), manifest generation/schema (Req 7.6), the `Cache-Control`/`Vary` directives the
+  callout response carries (Req 13.1–13.4),
   and effective-status derivation for `Share_Record`s.
 - **Integration tests**: Authorization Service Lambda against DynamoDB Local (create/
   revoke/extend/list, GSI query by VPC ARN, cache-header emission); the OrcaVault client
   against a mocked Athena API (query submission, polling, result-set parsing, and
   non-success query states); S3 manifest writes against a local S3 emulator.
-- **htsget-rs tests (Req 14.7)**: unit and integration coverage for the callout
-  cache — `max-age`/`Age` honoring, per-identity key isolation, disable/TTL-cap config,
-  concurrency safety, and fresh-callout-on-miss.
+- **htsget-rs tests (Req 14.10)**: unit and integration coverage for the existing callout
+  response cache — that the request-side `max-age` ceiling is emitted and honoured, that a
+  response lacking `public`/`s-maxage` or a sufficient `Vary` is not stored (fail closed),
+  that a response with no explicit `Cache-Control` is not stored and gets no heuristic
+  freshness, key-based isolation across differing forwarded identity headers (distinct
+  identities occupy distinct entries, with the identity component hashed), `use_cache` as the
+  sole toggle, concurrency safety, and fresh-callout-on-miss.
 - **End-to-end / operational (Req 15)**: the `validate` command doubles as the automated
   end-to-end test. Provider-side checks (roles, OrcaVault Mart reachability via Athena
   over the Lake Formation share, auth schema conformance, htsget-rs health, cross-account
@@ -825,8 +940,8 @@ grant.
   optional `--test-setup` canary mode exercises the full share path (create synthetic
   share -> invoke Test_Lambda -> clean up).
 - **Infrastructure tests (Req 16)**: CDK assertion tests on the synthesised template —
-  that the table carries both GSIs and no TTL, that the API is a REST API with caching
-  enabled on the stage and the requester identity in the cache key, that execution roles
+  that the table carries both GSIs and no TTL, that the API is a REST API with a deployed
+  stage and that no response cache is provisioned on it, that execution roles
   grant no more than the handlers need, and that the REST API id and stage name are
   exported as outputs.
 - **Security-sensitive checks**: verify fail-closed authorization, per-researcher cache
@@ -846,15 +961,17 @@ operator actually arrives with.
 | `docs/deployment.md` | How to deploy the Infrastructure_Stack, and how its outputs map to config | 18.4 |
 | `docs/prerequisites.md` | Per-account checklist of what this project assumes exists, and who owns each item | 18.5, Req 17 |
 | `docs/onboarding.md` | How to onboard a Researcher_Account, ending in a `validate` run | 18.6 |
-| `docs/operations.md` | Cache-bounded revocation, immutable library sets, idempotency, ~1 day warehouse lag | 18.7 |
+| `docs/operations.md` | TTL-bounded revocation propagation, immutable library sets, idempotency, ~1 day warehouse lag | 18.7 |
 | `docs/manifest.md` | Manifest schema, location, and that it is descriptive only | 18.8 |
 
 Two documentation obligations are structural rather than editorial. The prerequisites
 checklist is derived from the "Deployment ownership boundaries" table, so the two must not
 drift. And the operational caveats in `docs/operations.md` are the ones an administrator
-cannot infer from the CLI's own output — particularly that a revoke is bounded by
-Cache_TTL rather than immediate, and that `--flush-cache` narrows that window without
-closing it. Documentation is updated in the same change as the behaviour it describes
+cannot infer from the CLI's own output — particularly that a revoke is applied to the
+Share_Record immediately but observed by htsget-rs only once the cached decision expires,
+that propagation is therefore bounded by the Cache_TTL ceiling and the ceiling is itself
+the revocation SLA, and that no operator override or manual cache flush exists (Req 18.7).
+Documentation is updated in the same change as the behaviour it describes
 (Req 18.10).
 
 ## Future Directions
@@ -904,7 +1021,8 @@ consent, or attribute conditions. Not part of the current build.
 an entity store (researchers, libraries, files) instead of an `AuthorizationRestrictions`
 document. htsget-rs embeds the `cedar-policy` crate and evaluates each request locally with
 `is_authorized`. The callout then caches the policy set + entities per requester (policies
-change only on admin actions), and revoke still works by flushing that cache.
+change only on admin actions), and revocation still propagates as those cached entries
+expire, bounded by the same Cache_TTL ceiling.
 
 **Three inputs to a decision.** Cedar's `is_authorized` combines: (1) **policies** — the
 `permit`/`forbid` rules; (2) **entities** — the facts the rules read (each principal /
@@ -1002,4 +1120,3 @@ is retained.
 **When it's worth it.** Overkill for whole-library and simple region/format grants. It
 earns its keep once any two of {exclusions, consent/DUO conditions, identity-attribute
 conditions} are needed, at which point it delivers them in one validated model.
-nt it delivers them in one validated model.

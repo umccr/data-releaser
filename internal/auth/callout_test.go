@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -58,8 +59,8 @@ func TestComputeCacheControl_AllowResponse_UnlimitedShares(t *testing.T) {
 	}
 
 	result := ComputeCacheControl(records, now, ceiling, denyTTL)
-	if result != "max-age=3600" {
-		t.Errorf("expected max-age=3600, got %q", result)
+	if result != "s-maxage=3600, public" {
+		t.Errorf("expected s-maxage=3600, public, got %q", result)
 	}
 }
 
@@ -75,8 +76,8 @@ func TestComputeCacheControl_AllowResponse_ExpiringShare(t *testing.T) {
 	}
 
 	result := ComputeCacheControl(records, now, ceiling, denyTTL)
-	if result != "max-age=1800" {
-		t.Errorf("expected max-age=1800, got %q", result)
+	if result != "s-maxage=1800, public" {
+		t.Errorf("expected s-maxage=1800, public, got %q", result)
 	}
 }
 
@@ -94,8 +95,8 @@ func TestComputeCacheControl_AllowResponse_MinRemainingLifetime(t *testing.T) {
 	}
 
 	result := ComputeCacheControl(records, now, ceiling, denyTTL)
-	if result != "max-age=600" {
-		t.Errorf("expected max-age=600, got %q", result)
+	if result != "s-maxage=600, public" {
+		t.Errorf("expected s-maxage=600, public, got %q", result)
 	}
 }
 
@@ -111,8 +112,8 @@ func TestComputeCacheControl_AllowResponse_CappedAtCeiling(t *testing.T) {
 	}
 
 	result := ComputeCacheControl(records, now, ceiling, denyTTL)
-	if result != "max-age=3600" {
-		t.Errorf("expected max-age=3600, got %q", result)
+	if result != "s-maxage=3600, public" {
+		t.Errorf("expected s-maxage=3600, public, got %q", result)
 	}
 }
 
@@ -130,8 +131,8 @@ func TestComputeCacheControl_AllowResponse_MixedUnlimitedAndExpiring(t *testing.
 
 	// min(1h, 20m) = 20m = 1200s
 	result := ComputeCacheControl(records, now, ceiling, denyTTL)
-	if result != "max-age=1200" {
-		t.Errorf("expected max-age=1200, got %q", result)
+	if result != "s-maxage=1200, public" {
+		t.Errorf("expected s-maxage=1200, public, got %q", result)
 	}
 }
 
@@ -147,8 +148,8 @@ func TestComputeCacheControl_AllowResponse_AlmostExpired(t *testing.T) {
 	}
 
 	result := ComputeCacheControl(records, now, ceiling, denyTTL)
-	if result != "max-age=5" {
-		t.Errorf("expected max-age=5, got %q", result)
+	if result != "s-maxage=5, public" {
+		t.Errorf("expected s-maxage=5, public, got %q", result)
 	}
 }
 
@@ -164,8 +165,8 @@ func TestComputeCacheControl_AllowResponse_JustExpired(t *testing.T) {
 	}
 
 	result := ComputeCacheControl(records, now, ceiling, denyTTL)
-	if result != "max-age=0" {
-		t.Errorf("expected max-age=0, got %q", result)
+	if result != "s-maxage=0, public" {
+		t.Errorf("expected s-maxage=0, public, got %q", result)
 	}
 }
 
@@ -180,8 +181,8 @@ func TestComputeCacheControl_AllowResponse_CustomCeiling(t *testing.T) {
 	}
 
 	result := ComputeCacheControl(records, now, ceiling, denyTTL)
-	if result != "max-age=86400" {
-		t.Errorf("expected max-age=86400, got %q", result)
+	if result != "s-maxage=86400, public" {
+		t.Errorf("expected s-maxage=86400, public, got %q", result)
 	}
 }
 
@@ -279,10 +280,16 @@ func TestHandleCalloutWithHeaders_AllowWithCacheControl(t *testing.T) {
 		t.Error("expected non-empty htsgetAuth for allow response")
 	}
 
-	// Cache-Control should be approximately max-age=1800 (30 minutes)
+	// Cache-Control should be approximately s-maxage=1800, public (30 minutes)
 	// Allow a small tolerance since time passes between test setup and computation
 	if result.CacheControl == "max-age=60" {
 		t.Errorf("expected allow cache-control (not deny TTL), got %q", result.CacheControl)
+	}
+	if !strings.HasPrefix(result.CacheControl, "s-maxage=") {
+		t.Errorf("expected allow cache-control to start with s-maxage=, got %q", result.CacheControl)
+	}
+	if !strings.HasSuffix(result.CacheControl, ", public") {
+		t.Errorf("expected allow cache-control to end with , public, got %q", result.CacheControl)
 	}
 }
 
@@ -323,8 +330,8 @@ func TestHandleCalloutWithHeaders_AllowUnlimitedShare(t *testing.T) {
 	}
 
 	// For unlimited share, max-age should equal ceiling (3600)
-	if result.CacheControl != "max-age=3600" {
-		t.Errorf("expected max-age=3600 for unlimited share, got %q", result.CacheControl)
+	if result.CacheControl != "s-maxage=3600, public" {
+		t.Errorf("expected s-maxage=3600, public for unlimited share, got %q", result.CacheControl)
 	}
 }
 

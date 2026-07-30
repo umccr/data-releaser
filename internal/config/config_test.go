@@ -332,3 +332,123 @@ func contains(s, substr string) bool {
 	}
 	return false
 }
+
+func TestLoad_ManifestDefaults(t *testing.T) {
+	content := `
+warehouse:
+  athenaWorkgroup: "primary"
+  database: "mart"
+endpoints:
+  authorization: "https://auth.example.com"
+  htsgetBaseUrl: "https://htsget.example.com"
+manifest:
+  bucket: "data-control-manifest-bucket"
+`
+	path := writeTempConfig(t, content)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Manifest.Bucket != "data-control-manifest-bucket" {
+		t.Errorf("expected manifest bucket, got %q", cfg.Manifest.Bucket)
+	}
+	if cfg.Manifest.KeyTemplate != DefaultManifestKeyTemplate {
+		t.Errorf("expected default key template %q, got %q", DefaultManifestKeyTemplate, cfg.Manifest.KeyTemplate)
+	}
+}
+
+func TestLoad_RejectsUnknownKeyTemplatePlaceholder(t *testing.T) {
+	content := `
+warehouse:
+  athenaWorkgroup: "primary"
+  database: "mart"
+endpoints:
+  authorization: "https://auth.example.com"
+  htsgetBaseUrl: "https://htsget.example.com"
+manifest:
+  bucket: "data-control-manifest-bucket"
+  keyTemplate: "manifests/{accountId}/{unknown}/manifest.json"
+`
+	path := writeTempConfig(t, content)
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for unknown placeholder, got nil")
+	}
+	if !containsString(err.Error(), "unknown placeholder") {
+		t.Errorf("expected 'unknown placeholder' in error, got %q", err.Error())
+	}
+}
+
+func TestRenderManifestKey(t *testing.T) {
+	tests := []struct {
+		name      string
+		template  string
+		accountID string
+		want      string
+		wantErr   bool
+	}{
+		{
+			name:      "default template substitutes accountId",
+			template:  DefaultManifestKeyTemplate,
+			accountID: "534840902377",
+			want:      "manifests/534840902377/manifest.json",
+		},
+		{
+			name:      "custom template with accountId",
+			template:  "prefix/{accountId}/data.json",
+			accountID: "123456789012",
+			want:      "prefix/123456789012/data.json",
+		},
+		{
+			name:      "no placeholder is fine",
+			template:  "manifests/static.json",
+			accountID: "123456789012",
+			want:      "manifests/static.json",
+		},
+		{
+			name:      "unknown placeholder rejected",
+			template:  "manifests/{region}/{accountId}/manifest.json",
+			accountID: "123456789012",
+			wantErr:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := ManifestConfig{Bucket: "b", KeyTemplate: tt.template}
+			got, err := m.RenderManifestKey(tt.accountID)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got key %q", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("RenderManifestKey: expected %q, got %q", tt.want, got)
+			}
+		})
+	}
+}
+
+func TestRenderManifestPrefix(t *testing.T) {
+	m := ManifestConfig{Bucket: "b", KeyTemplate: DefaultManifestKeyTemplate}
+	got, err := m.RenderManifestPrefix("534840902377")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := "manifests/534840902377/*"
+	if got != want {
+		t.Errorf("RenderManifestPrefix: expected %q, got %q", want, got)
+	}
+
+	// Unknown placeholder propagates as an error.
+	bad := ManifestConfig{KeyTemplate: "manifests/{bogus}/manifest.json"}
+	if _, err := bad.RenderManifestPrefix("123"); err == nil {
+		t.Fatal("expected error for unknown placeholder in prefix rendering")
+	}
+}

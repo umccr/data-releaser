@@ -1,0 +1,30 @@
+{
+  "name": "data-releaser-infrastructure",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AWS CDK app deploying the Data_Control_Account resources for the Data Releaser Authorization Service (Requirement 16).",
+  "bin": {
+    "data-releaser-infrastructure": "bin/data-releaser.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "test": "jest",
+    "build:lambdas": "bash scripts/build-lambdas.sh",
+    "synth": "cdk synth",
+    "cdk": "cdk"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "2.160.0",
+    "constructs": "10.3.0"
+  },
+  "devDependencies": {
+    "@types/jest": "29.5.12",
+    "@types/node": "20.14.9",
+    "aws-cdk": "2.160.0",
+    "jest": "29.7.0",
+    "ts-jest": "29.2.2",
+    "ts-node": "10.9.2",
+    "typescript": "5.5.4"
+  }
+}

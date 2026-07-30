@@ -10,8 +10,11 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/apigateway"
 	"github.com/aws/aws-sdk-go-v2/service/athena"
 	athenatypes "github.com/aws/aws-sdk-go-v2/service/athena/types"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 
@@ -33,11 +36,15 @@ type HTTPClient interface {
 
 // ValidateProviderOpts holds the dependencies for provider-side validation.
 type ValidateProviderOpts struct {
-	STSClient    internalaws.STSClient
-	AthenaClient internalaws.AthenaClient
-	S3Client     internalaws.S3Client
-	HTTPClient   HTTPClient
-	Config       *config.Config
+	STSClient        internalaws.STSClient
+	AthenaClient     internalaws.AthenaClient
+	S3Client         internalaws.S3Client
+	DynamoDBClient   internalaws.DynamoDBClient
+	APIGatewayClient internalaws.APIGatewayClient
+	HTTPClient       HTTPClient
+	Config           *config.Config
+	// ShareRecordsTableName is the DynamoDB table the Infrastructure_Stack provisions.
+	ShareRecordsTableName string
 }
 
 // ValidateProvider runs all provider-side checks and returns per-check results.
@@ -59,6 +66,11 @@ func ValidateProvider(ctx context.Context, opts ValidateProviderOpts) []Check {
 
 	// Check 5: Cross-account S3 HeadObject on canary object
 	checks = append(checks, checkCrossAccountS3(ctx, opts.S3Client, opts.Config.Validation))
+
+	// Check 6: Infrastructure_Stack resources present and consistent with config (Req 15.10)
+	checks = append(checks, checkShareRecordsTable(ctx, opts.DynamoDBClient, opts.ShareRecordsTableName))
+	checks = append(checks, checkManifestBucket(ctx, opts.S3Client, opts.Config.Manifest.Bucket))
+	checks = append(checks, checkAPIGatewayStage(ctx, opts.APIGatewayClient, opts.Config.Endpoints))
 
 	return checks
 }
@@ -293,6 +305,98 @@ func checkCrossAccountS3(ctx context.Context, s3Client internalaws.S3Client, val
 	if err != nil {
 		check.Passed = false
 		check.Error = fmt.Sprintf("S3 HeadObject on canary object failed: %v", err)
+		return check
+	}
+
+	check.Passed = true
+	return check
+}
+
+// checkShareRecordsTable verifies the Share_Record DynamoDB table provisioned by the
+// Infrastructure_Stack exists and is active (Req 15.10).
+func checkShareRecordsTable(ctx context.Context, ddbClient internalaws.DynamoDBClient, tableName string) Check {
+	check := Check{Name: "Share_Record DynamoDB Table (Infrastructure_Stack)"}
+
+	if ddbClient == nil {
+		check.Passed = false
+		check.Error = "DynamoDB client not configured"
+		return check
+	}
+	if tableName == "" {
+		check.Passed = false
+		check.Error = "Share_Record table name not configured"
+		return check
+	}
+
+	_, err := ddbClient.DescribeTable(ctx, &dynamodb.DescribeTableInput{
+		TableName: aws.String(tableName),
+	})
+	if err != nil {
+		check.Passed = false
+		check.Error = fmt.Sprintf("DynamoDB table %q not found or inaccessible; "+
+			"the Infrastructure_Stack DynamoDB table deployment step is missing or misconfigured: %v", tableName, err)
+		return check
+	}
+
+	check.Passed = true
+	return check
+}
+
+// checkManifestBucket verifies the Manifest_Bucket provisioned by the Infrastructure_Stack
+// exists and is writable by the Data Control identity via a HeadBucket call (Req 15.10).
+func checkManifestBucket(ctx context.Context, s3Client internalaws.S3Client, bucket string) Check {
+	check := Check{Name: "Manifest_Bucket (Infrastructure_Stack)"}
+
+	if bucket == "" {
+		check.Passed = false
+		check.Error = "manifest.bucket not configured; the Manifest_Bucket name must be sourced from the Infrastructure_Stack output"
+		return check
+	}
+
+	_, err := s3Client.HeadBucket(ctx, &s3.HeadBucketInput{
+		Bucket: aws.String(bucket),
+	})
+	if err != nil {
+		check.Passed = false
+		check.Error = fmt.Sprintf("manifest bucket %q missing or not writable by the Data Control identity; "+
+			"the Infrastructure_Stack Manifest_Bucket deployment step is missing or misconfigured: %v", bucket, err)
+		return check
+	}
+
+	check.Passed = true
+	return check
+}
+
+// checkAPIGatewayStage verifies the API Gateway REST API stage named in configuration
+// exists (Req 15.10).
+func checkAPIGatewayStage(ctx context.Context, apiClient internalaws.APIGatewayClient, endpoints config.EndpointsConfig) Check {
+	check := Check{Name: "API Gateway REST API Stage (Infrastructure_Stack)"}
+
+	if apiClient == nil {
+		check.Passed = false
+		check.Error = "API Gateway client not configured"
+		return check
+	}
+	if endpoints.APIGatewayRestAPIID == "" {
+		check.Passed = false
+		check.Error = "endpoints.apiGatewayRestApiId not configured; cannot verify the API Gateway stage"
+		return check
+	}
+	if endpoints.APIGatewayStageName == "" {
+		check.Passed = false
+		check.Error = "endpoints.apiGatewayStageName not configured; cannot verify the API Gateway stage"
+		return check
+	}
+
+	_, err := apiClient.GetStage(ctx, &apigateway.GetStageInput{
+		RestApiId: aws.String(endpoints.APIGatewayRestAPIID),
+		StageName: aws.String(endpoints.APIGatewayStageName),
+	})
+	if err != nil {
+		check.Passed = false
+		check.Error = fmt.Sprintf("API Gateway stage %q on REST API %q not found; "+
+			"the Infrastructure_Stack API Gateway deployment step is missing or misconfigured: %v",
+			endpoints.APIGatewayStageName, endpoints.APIGatewayRestAPIID, err)
 		return check
 	}
 

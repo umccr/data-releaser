@@ -16,13 +16,16 @@ import (
 
 // mockS3Client implements the S3Client interface for testing.
 type mockS3Client struct {
-	putObjectFn    func(ctx context.Context, params *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error)
-	deleteObjectFn func(ctx context.Context, params *s3.DeleteObjectInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectOutput, error)
-	headObjectFn   func(ctx context.Context, params *s3.HeadObjectInput, optFns ...func(*s3.Options)) (*s3.HeadObjectOutput, error)
+	putObjectFn       func(ctx context.Context, params *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error)
+	deleteObjectFn    func(ctx context.Context, params *s3.DeleteObjectInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectOutput, error)
+	headObjectFn      func(ctx context.Context, params *s3.HeadObjectInput, optFns ...func(*s3.Options)) (*s3.HeadObjectOutput, error)
+	headBucketFn      func(ctx context.Context, params *s3.HeadBucketInput, optFns ...func(*s3.Options)) (*s3.HeadBucketOutput, error)
+	getBucketPolicyFn func(ctx context.Context, params *s3.GetBucketPolicyInput, optFns ...func(*s3.Options)) (*s3.GetBucketPolicyOutput, error)
 
 	// Track calls for assertions
-	putCalls    []s3.PutObjectInput
-	deleteCalls []s3.DeleteObjectInput
+	putCalls        []s3.PutObjectInput
+	deleteCalls     []s3.DeleteObjectInput
+	headBucketCalls []s3.HeadBucketInput
 }
 
 func (m *mockS3Client) PutObject(ctx context.Context, params *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
@@ -48,6 +51,23 @@ func (m *mockS3Client) HeadObject(ctx context.Context, params *s3.HeadObjectInpu
 	return &s3.HeadObjectOutput{}, nil
 }
 
+func (m *mockS3Client) HeadBucket(ctx context.Context, params *s3.HeadBucketInput, optFns ...func(*s3.Options)) (*s3.HeadBucketOutput, error) {
+	m.headBucketCalls = append(m.headBucketCalls, *params)
+	if m.headBucketFn != nil {
+		return m.headBucketFn(ctx, params, optFns...)
+	}
+	return &s3.HeadBucketOutput{}, nil
+}
+
+func (m *mockS3Client) GetBucketPolicy(ctx context.Context, params *s3.GetBucketPolicyInput, optFns ...func(*s3.Options)) (*s3.GetBucketPolicyOutput, error) {
+	if m.getBucketPolicyFn != nil {
+		return m.getBucketPolicyFn(ctx, params, optFns...)
+	}
+	return &s3.GetBucketPolicyOutput{}, nil
+}
+
+const testManifestKey = "manifests/534840902377/manifest.json"
+
 func TestWriter_Upload_Success(t *testing.T) {
 	mock := &mockS3Client{}
 	writer := NewWriter(mock)
@@ -68,7 +88,7 @@ func TestWriter_Upload_Success(t *testing.T) {
 		},
 	}
 
-	err := writer.Upload(context.Background(), "researcher-bucket", manifest)
+	err := writer.Upload(context.Background(), "researcher-bucket", testManifestKey, manifest)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -81,8 +101,8 @@ func TestWriter_Upload_Success(t *testing.T) {
 	if *call.Bucket != "researcher-bucket" {
 		t.Errorf("bucket: expected %q, got %q", "researcher-bucket", *call.Bucket)
 	}
-	if *call.Key != ManifestKey {
-		t.Errorf("key: expected %q, got %q", ManifestKey, *call.Key)
+	if *call.Key != testManifestKey {
+		t.Errorf("key: expected %q, got %q", testManifestKey, *call.Key)
 	}
 	if *call.ContentType != "application/json" {
 		t.Errorf("content-type: expected %q, got %q", "application/json", *call.ContentType)
@@ -125,7 +145,7 @@ func TestWriter_Upload_S3Error(t *testing.T) {
 		Libraries:     []model.ManifestLibrary{},
 	}
 
-	err := writer.Upload(context.Background(), "researcher-bucket", manifest)
+	err := writer.Upload(context.Background(), "researcher-bucket", testManifestKey, manifest)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -141,7 +161,7 @@ func TestWriter_Delete_Success(t *testing.T) {
 	mock := &mockS3Client{}
 	writer := NewWriter(mock)
 
-	err := writer.Delete(context.Background(), "researcher-bucket")
+	err := writer.Delete(context.Background(), "researcher-bucket", testManifestKey)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -154,8 +174,8 @@ func TestWriter_Delete_Success(t *testing.T) {
 	if *call.Bucket != "researcher-bucket" {
 		t.Errorf("bucket: expected %q, got %q", "researcher-bucket", *call.Bucket)
 	}
-	if *call.Key != ManifestKey {
-		t.Errorf("key: expected %q, got %q", ManifestKey, *call.Key)
+	if *call.Key != testManifestKey {
+		t.Errorf("key: expected %q, got %q", testManifestKey, *call.Key)
 	}
 }
 
@@ -167,7 +187,7 @@ func TestWriter_Delete_S3Error(t *testing.T) {
 	}
 	writer := NewWriter(mock)
 
-	err := writer.Delete(context.Background(), "researcher-bucket")
+	err := writer.Delete(context.Background(), "researcher-bucket", testManifestKey)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -177,7 +197,7 @@ func TestWriter_Sync_NilManifest_Deletes(t *testing.T) {
 	mock := &mockS3Client{}
 	writer := NewWriter(mock)
 
-	err := writer.Sync(context.Background(), "researcher-bucket", nil)
+	err := writer.Sync(context.Background(), "researcher-bucket", testManifestKey, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -206,7 +226,7 @@ func TestWriter_Sync_NonNilManifest_Uploads(t *testing.T) {
 		},
 	}
 
-	err := writer.Sync(context.Background(), "researcher-bucket", manifest)
+	err := writer.Sync(context.Background(), "researcher-bucket", testManifestKey, manifest)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -220,9 +240,54 @@ func TestWriter_Sync_NonNilManifest_Uploads(t *testing.T) {
 	}
 }
 
-func TestWriter_Upload_CorrectKey(t *testing.T) {
-	// Verify the well-known key path is "data-releaser/manifest.json"
-	if ManifestKey != "data-releaser/manifest.json" {
-		t.Errorf("ManifestKey: expected %q, got %q", "data-releaser/manifest.json", ManifestKey)
+func TestWriter_VerifyBucketWritable_Success(t *testing.T) {
+	mock := &mockS3Client{}
+	writer := NewWriter(mock)
+
+	if err := writer.VerifyBucketWritable(context.Background(), "manifest-bucket"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(mock.headBucketCalls) != 1 {
+		t.Fatalf("expected 1 HeadBucket call, got %d", len(mock.headBucketCalls))
+	}
+	if *mock.headBucketCalls[0].Bucket != "manifest-bucket" {
+		t.Errorf("bucket: expected %q, got %q", "manifest-bucket", *mock.headBucketCalls[0].Bucket)
+	}
+}
+
+func TestWriter_VerifyBucketWritable_Error(t *testing.T) {
+	mock := &mockS3Client{
+		headBucketFn: func(ctx context.Context, params *s3.HeadBucketInput, optFns ...func(*s3.Options)) (*s3.HeadBucketOutput, error) {
+			return nil, errors.New("not found")
+		},
+	}
+	writer := NewWriter(mock)
+
+	err := writer.VerifyBucketWritable(context.Background(), "manifest-bucket")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+}
+
+func TestWriter_RendersPerAccountKey(t *testing.T) {
+	// Verify the writer uses the caller-supplied per-account key (Req 7.2).
+	mock := &mockS3Client{}
+	writer := NewWriter(mock)
+
+	manifest := &model.Manifest{
+		HtsgetBaseUrl: "https://htsget.example.com",
+		GeneratedAt:   time.Now().UTC(),
+		Libraries:     []model.ManifestLibrary{{LibraryID: "L001", Files: []model.ManifestFile{{Request: "reads/L001"}}}},
+	}
+
+	key := "manifests/123456789012/manifest.json"
+	if err := writer.Upload(context.Background(), "manifest-bucket", key, manifest); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(mock.putCalls) != 1 {
+		t.Fatalf("expected 1 PutObject call, got %d", len(mock.putCalls))
+	}
+	if *mock.putCalls[0].Key != key {
+		t.Errorf("key: expected %q, got %q", key, *mock.putCalls[0].Key)
 	}
 }

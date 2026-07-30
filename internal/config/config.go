@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -18,6 +20,62 @@ type Config struct {
 	Endpoints  EndpointsConfig  `yaml:"endpoints"`
 	Cache      CacheConfig      `yaml:"cache"`
 	Validation ValidationConfig `yaml:"validation"`
+	Manifest   ManifestConfig   `yaml:"manifest"`
+}
+
+// ManifestConfig holds the Manifest_Bucket settings. The bucket is a single
+// same-account Data Control bucket (sourced from an Infrastructure_Stack output);
+// each Researcher_Account's manifest lives under a per-account key prefix.
+type ManifestConfig struct {
+	// Bucket is the Data Control Manifest_Bucket name. It is never hard-coded and
+	// is sourced from the Infrastructure_Stack output (Req 7.2, 7.9).
+	Bucket string `yaml:"bucket"`
+	// KeyTemplate is the per-account object key template. It supports the
+	// {accountId} placeholder and defaults to DefaultManifestKeyTemplate.
+	KeyTemplate string `yaml:"keyTemplate"`
+}
+
+// DefaultManifestKeyTemplate is the default per-account manifest key template.
+const DefaultManifestKeyTemplate = "manifests/{accountId}/manifest.json"
+
+// manifestPlaceholderRe matches {...} placeholder tokens in a key template.
+var manifestPlaceholderRe = regexp.MustCompile(`\{[^}]*\}`)
+
+// RenderManifestKey renders the manifest key template for the given account ID by
+// substituting the {accountId} placeholder. Any other {...} token is rejected with
+// a descriptive error so misconfigured templates fail fast (Req 7.2).
+func (m ManifestConfig) RenderManifestKey(accountID string) (string, error) {
+	var rerr error
+	rendered := manifestPlaceholderRe.ReplaceAllStringFunc(m.KeyTemplate, func(token string) string {
+		name := strings.TrimSuffix(strings.TrimPrefix(token, "{"), "}")
+		switch name {
+		case "accountId":
+			return accountID
+		default:
+			if rerr == nil {
+				rerr = fmt.Errorf("unknown placeholder %q in manifest.keyTemplate %q (only {accountId} is supported)", token, m.KeyTemplate)
+			}
+			return token
+		}
+	})
+	if rerr != nil {
+		return "", rerr
+	}
+	return rendered, nil
+}
+
+// RenderManifestPrefix renders the per-account manifest key prefix (the directory
+// portion of the rendered key with a trailing "*"), for example
+// "manifests/<accountId>/*". Used to describe the researcher's cross-account read scope.
+func (m ManifestConfig) RenderManifestPrefix(accountID string) (string, error) {
+	key, err := m.RenderManifestKey(accountID)
+	if err != nil {
+		return "", err
+	}
+	if idx := strings.LastIndex(key, "/"); idx >= 0 {
+		return key[:idx+1] + "*", nil
+	}
+	return "*", nil
 }
 
 // WarehouseConfig holds OrcaVault Mart (Athena/Lake Formation) settings.
@@ -32,10 +90,10 @@ type EndpointsConfig struct {
 	Authorization string `yaml:"authorization"`
 	HtsgetBaseURL string `yaml:"htsgetBaseUrl"`
 	// APIGatewayRestAPIID is the REST API ID for the Authorization Service API Gateway.
-	// Required for cache flush operations.
+	// Used by the `validate` command's API Gateway stage check (Req 15.10).
 	APIGatewayRestAPIID string `yaml:"apiGatewayRestApiId"`
 	// APIGatewayStageName is the stage name for the Authorization Service API Gateway.
-	// Required for cache flush operations. Defaults to "prod".
+	// Used by the `validate` command's API Gateway stage check (Req 15.10). Defaults to "prod".
 	APIGatewayStageName string `yaml:"apiGatewayStageName"`
 }
 
@@ -157,6 +215,9 @@ func applyDefaults(cfg *Config) {
 	if cfg.Endpoints.APIGatewayStageName == "" {
 		cfg.Endpoints.APIGatewayStageName = "prod"
 	}
+	if cfg.Manifest.KeyTemplate == "" {
+		cfg.Manifest.KeyTemplate = DefaultManifestKeyTemplate
+	}
 }
 
 // validate checks that all required fields are present and valid.
@@ -174,6 +235,11 @@ func validate(cfg *Config) error {
 	}
 	if cfg.Endpoints.HtsgetBaseURL == "" {
 		errs = append(errs, "endpoints.htsgetBaseUrl is required")
+	}
+
+	// Validate the manifest key template renders and rejects unknown placeholders (Req 7.2).
+	if _, err := cfg.Manifest.RenderManifestKey("000000000000"); err != nil {
+		errs = append(errs, err.Error())
 	}
 
 	if len(errs) > 0 {

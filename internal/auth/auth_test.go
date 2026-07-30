@@ -107,6 +107,10 @@ func (m *mockDynamoDBClient) Scan(ctx context.Context, params *dynamodb.ScanInpu
 	return m.scanFn(ctx, params)
 }
 
+func (m *mockDynamoDBClient) DescribeTable(ctx context.Context, params *dynamodb.DescribeTableInput, optFns ...func(*dynamodb.Options)) (*dynamodb.DescribeTableOutput, error) {
+	return &dynamodb.DescribeTableOutput{}, nil
+}
+
 func TestCreate_Success(t *testing.T) {
 	mock := newMockDynamoDBClient()
 	store := NewShareStore(mock, "ShareRecords")

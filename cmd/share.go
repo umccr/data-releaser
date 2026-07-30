@@ -19,12 +19,6 @@ import (
 	"github.com/umccr/data-releaser/internal/warehouse"
 )
 
-// researcherBucketName derives the manifest bucket name from the researcher account ID.
-// Convention: <account-id>-data-releaser-manifest
-func researcherBucketName(accountID string) string {
-	return accountID + "-data-releaser-manifest"
-}
-
 // parseDuration parses a duration string that supports day suffixes (e.g. "30d", "7d")
 // as well as standard Go duration strings (e.g. "24h", "720h").
 // Returns the parsed duration or an error if the format is invalid.
@@ -149,6 +143,30 @@ func runShare(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	// --- Step 3b: Preflight - verify the Manifest_Bucket exists and is writable by
+	// the Data Control identity BEFORE any Share_Record is created (Req 7.10, 17.7, 1.8).
+	// This removes the window where a share is persisted and only then fails on the
+	// manifest upload.
+	writer := manifest.NewWriter(factory.S3Client())
+	manifestBucket := strings.TrimSpace(cfg.Manifest.Bucket)
+	if manifestBucket == "" {
+		cfgErr := fmt.Errorf("manifest.bucket is not configured; the Manifest_Bucket name must be sourced from the Infrastructure_Stack output")
+		fmt.Fprintf(os.Stderr, "Error: %v\n", cfgErr)
+		return cfgErr
+	}
+	// Resolve the per-account manifest key (also validates the key template).
+	manifestKey, err := cfg.Manifest.RenderManifestKey(account)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return err
+	}
+	if err := writer.VerifyBucketWritable(ctx, manifestBucket); err != nil {
+		wrapped := fmt.Errorf("manifest bucket %q is missing or not writable by the Data Control identity; "+
+			"the Infrastructure_Stack is not deployed or is misconfigured: %w", manifestBucket, err)
+		fmt.Fprintf(os.Stderr, "Error: %v\n", wrapped)
+		return wrapped
+	}
+
 	// --- Step 4: Resolve libraries via Athena (Req 1.3) ---
 	whClient := warehouse.NewClient(factory.AthenaClient(), cfg.Warehouse)
 	resolved, err := whClient.ResolveLibraries(ctx, cleanLibraries)
@@ -204,9 +222,7 @@ func runShare(cmd *cobra.Command, args []string) error {
 	manifestDoc := generator.Generate(activeShares, now)
 
 	// --- Step 9: Upload manifest (Req 7.2) ---
-	bucket := researcherBucketName(account)
-	writer := manifest.NewWriter(factory.S3Client())
-	if err := writer.Sync(ctx, bucket, manifestDoc); err != nil {
+	if err := writer.Sync(ctx, manifestBucket, manifestKey, manifestDoc); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: share record created but manifest upload failed: %v\n", err)
 		return fmt.Errorf("manifest upload failed (share %s was created): %w", record.ShareID, err)
 	}

@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"text/tabwriter"
@@ -74,10 +75,19 @@ func runList(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// Display tabular output (Req 8.2).
-	now := time.Now().UTC()
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "SHARE ID\tACCOUNT\tLIBRARIES\tCREATED\tEXPIRY\tSTATUS")
+	// Display tabular output (Req 8.2). All records are rendered regardless of
+	// effective status, so expired and revoked shares remain visible (Req 8.1).
+	renderShareTable(os.Stdout, records, time.Now().UTC())
+	return nil
+}
+
+// renderShareTable writes the tabular share listing to w. Every record is rendered,
+// including expired and revoked shares (they must remain visible per Req 8.1), with the
+// effective status computed against now. Records are shown in the order provided (the
+// store returns them ordered by createdAt descending, Req 8.5).
+func renderShareTable(w io.Writer, records []*model.ShareRecord, now time.Time) {
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "SHARE ID\tACCOUNT\tLIBRARIES\tCREATED\tEXPIRY\tSTATUS")
 
 	for _, r := range records {
 		libraries := formatLibraries(r.LibraryIDs)
@@ -85,7 +95,7 @@ func runList(cmd *cobra.Command, args []string) error {
 		expiry := formatExpiry(r.ExpiresAt)
 		status := string(r.EffectiveStatus(now))
 
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
 			r.ShareID,
 			r.ResearcherAccountID,
 			libraries,
@@ -95,8 +105,7 @@ func runList(cmd *cobra.Command, args []string) error {
 		)
 	}
 
-	w.Flush()
-	return nil
+	tw.Flush()
 }
 
 // formatLibraries joins library IDs with commas, truncating if there are too many.

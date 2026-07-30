@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 
 	internalaws "github.com/umccr/data-releaser/internal/aws"
 	latticepkg "github.com/umccr/data-releaser/internal/lattice"
@@ -23,7 +25,13 @@ type researcherLambdaResponse struct {
 type ValidateResearcherOpts struct {
 	RAMClient    internalaws.RAMClient
 	LambdaClient internalaws.LambdaClient
+	S3Client     internalaws.S3Client
 	AccountID    string
+	// ManifestBucket is the Data Control Manifest_Bucket whose cross-account policy
+	// is checked for the researcher's read grant.
+	ManifestBucket string
+	// ManifestPrefix is the account's manifest key prefix (e.g. manifests/<accountId>/*).
+	ManifestPrefix string
 }
 
 // ValidateResearcher runs researcher-side validation checks and returns per-check results.
@@ -31,6 +39,7 @@ type ValidateResearcherOpts struct {
 func ValidateResearcher(ctx context.Context, opts ValidateResearcherOpts) []Check {
 	var checks []Check
 	checks = append(checks, checkRAMAssociation(ctx, opts.RAMClient, opts.AccountID))
+	checks = append(checks, checkManifestBucketPolicy(ctx, opts.S3Client, opts.ManifestBucket, opts.ManifestPrefix, opts.AccountID))
 	checks = append(checks, researcherCheckTestLambda(ctx, opts.LambdaClient)...)
 	return checks
 }
@@ -46,6 +55,155 @@ func checkRAMAssociation(ctx context.Context, ramClient internalaws.RAMClient, a
 		return check
 	}
 	check.Passed = true
+	return check
+}
+
+// bucketPolicyDocument is a minimal representation of an S3 bucket policy for grant checking.
+type bucketPolicyDocument struct {
+	Statement []bucketPolicyStatement `json:"Statement"`
+}
+
+// bucketPolicyStatement is a single statement in a bucket policy. Principal, Action,
+// and Resource may each be a string or a list, so they are decoded flexibly.
+type bucketPolicyStatement struct {
+	Effect    string          `json:"Effect"`
+	Principal json.RawMessage `json:"Principal"`
+	Action    json.RawMessage `json:"Action"`
+	Resource  json.RawMessage `json:"Resource"`
+}
+
+// coerceStringList decodes a JSON value that may be a string or an array of strings.
+func coerceStringList(raw json.RawMessage) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+	var single string
+	if err := json.Unmarshal(raw, &single); err == nil {
+		return []string{single}
+	}
+	var list []string
+	if err := json.Unmarshal(raw, &list); err == nil {
+		return list
+	}
+	return nil
+}
+
+// coercePrincipalStrings extracts all principal identifiers from a Principal value,
+// which may be "*", a string, an array, or an object like {"AWS": [...]}.
+func coercePrincipalStrings(raw json.RawMessage) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+	// Try string or []string first.
+	if vals := coerceStringList(raw); vals != nil {
+		return vals
+	}
+	// Try object form: {"AWS": "..."} or {"AWS": [...]}.
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err == nil {
+		var out []string
+		for _, v := range obj {
+			out = append(out, coerceStringList(v)...)
+		}
+		return out
+	}
+	return nil
+}
+
+// checkManifestBucketPolicy verifies the Manifest_Bucket's cross-account bucket policy
+// grants the target Researcher_Account read access (s3:GetObject) to its own manifest
+// prefix. If the grant is absent, it reports that the onboarding step which adds the
+// cross-account read grant to the Manifest_Bucket policy is incomplete (Req 15.9).
+func checkManifestBucketPolicy(ctx context.Context, s3Client internalaws.S3Client, bucket, prefix, accountID string) Check {
+	check := Check{Name: "Manifest_Bucket Cross-Account Read Grant"}
+
+	if s3Client == nil {
+		check.Passed = false
+		check.Error = "S3 client not configured"
+		return check
+	}
+	if bucket == "" {
+		check.Passed = false
+		check.Error = "manifest.bucket not configured; cannot verify the researcher's cross-account read grant"
+		return check
+	}
+
+	out, err := s3Client.GetBucketPolicy(ctx, &s3.GetBucketPolicyInput{
+		Bucket: aws.String(bucket),
+	})
+	if err != nil {
+		check.Passed = false
+		check.Error = fmt.Sprintf("could not read the Manifest_Bucket %q policy; the researcher's cross-account read grant may be missing "+
+			"and the onboarding step which adds it to the Manifest_Bucket policy is incomplete: %v", bucket, err)
+		return check
+	}
+	if out.Policy == nil || *out.Policy == "" {
+		check.Passed = false
+		check.Error = fmt.Sprintf("the Manifest_Bucket %q has no bucket policy; the researcher's cross-account read grant is missing "+
+			"and the onboarding step which adds it to the Manifest_Bucket policy is incomplete", bucket)
+		return check
+	}
+
+	var doc bucketPolicyDocument
+	if err := json.Unmarshal([]byte(*out.Policy), &doc); err != nil {
+		check.Passed = false
+		check.Error = fmt.Sprintf("the Manifest_Bucket %q policy is not valid JSON: %v", bucket, err)
+		return check
+	}
+
+	// Derive the prefix path segment used to scope the grant (e.g. "manifests/<accountId>/").
+	prefixPath := strings.TrimSuffix(prefix, "*")
+
+	for _, st := range doc.Statement {
+		if !strings.EqualFold(st.Effect, "Allow") {
+			continue
+		}
+
+		// Principal must reference the researcher account.
+		principalMatch := false
+		for _, p := range coercePrincipalStrings(st.Principal) {
+			if strings.Contains(p, accountID) {
+				principalMatch = true
+				break
+			}
+		}
+		if !principalMatch {
+			continue
+		}
+
+		// Action must grant s3:GetObject (or a wildcard covering it).
+		actionMatch := false
+		for _, a := range coerceStringList(st.Action) {
+			la := strings.ToLower(a)
+			if la == "s3:getobject" || la == "s3:*" || la == "*" {
+				actionMatch = true
+				break
+			}
+		}
+		if !actionMatch {
+			continue
+		}
+
+		// Resource must be scoped to the account's own manifest prefix.
+		resourceMatch := false
+		for _, r := range coerceStringList(st.Resource) {
+			if strings.Contains(r, bucket) && (prefixPath == "" || strings.Contains(r, prefixPath) || strings.Contains(r, accountID)) {
+				resourceMatch = true
+				break
+			}
+		}
+		if !resourceMatch {
+			continue
+		}
+
+		check.Passed = true
+		return check
+	}
+
+	check.Passed = false
+	check.Error = fmt.Sprintf("the Manifest_Bucket %q policy does not grant account %s read (s3:GetObject) on its prefix %q; "+
+		"the researcher's cross-account read grant is missing and the onboarding step which adds it to the Manifest_Bucket policy is incomplete",
+		bucket, accountID, prefix)
 	return check
 }
 

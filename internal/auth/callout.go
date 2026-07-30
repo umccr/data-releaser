@@ -71,6 +71,12 @@ type CalloutResult struct {
 
 	// CacheControl is the Cache-Control header value to include in the HTTP response.
 	CacheControl string
+
+	// Vary is the Vary header value naming every forwarded identity header
+	// the decision depends on, so that any cache implementing secondary cache
+	// keys can revalidate correctly and so that the fail-closed storage
+	// precondition of Req 13.6 is satisfiable (Req 13.3).
+	Vary string
 }
 
 // HandleCallout processes an authorization callout for the given source VPC ARN.
@@ -90,6 +96,16 @@ func (h *CalloutHandler) HandleCallout(ctx context.Context, sourceVpcArn string)
 	return result.Response, nil
 }
 
+// VaryIdentityHeaders is the Vary header value the Authorization_Service emits
+// on every callout response (Req 13.3). It names the forwarded identity header(s)
+// that the authorization decision depends on, so that:
+//   - any cache implementing secondary cache keys can revalidate correctly, and
+//   - the fail-closed storage precondition of Req 13.6 is satisfiable.
+//
+// Per-requester isolation itself rests on the declared cache key in htsget-rs
+// (Req 14.4), NOT on this header.
+const VaryIdentityHeaders = "X-Forwarded-Source-Vpc-Arn"
+
 // HandleCalloutWithHeaders processes an authorization callout for the given source VPC ARN
 // and computes the Cache-Control header value based on the matched shares' remaining lifetimes.
 //
@@ -101,7 +117,7 @@ func (h *CalloutHandler) HandleCallout(ctx context.Context, sourceVpcArn string)
 //
 // Returns a CalloutResult containing both the response and the Cache-Control header.
 //
-// Requirements: 4.2, 4.3, 4.4, 2.4, 2.5, 2.6, 13.1, 13.2
+// Requirements: 4.2, 4.3, 4.4, 2.4, 2.5, 2.6, 13.1, 13.2, 13.3
 func (h *CalloutHandler) HandleCalloutWithHeaders(ctx context.Context, sourceVpcArn string, ceiling time.Duration, denyTTL time.Duration) (*CalloutResult, error) {
 	now := time.Now().UTC()
 
@@ -124,6 +140,7 @@ func (h *CalloutHandler) HandleCalloutWithHeaders(ctx context.Context, sourceVpc
 		return &CalloutResult{
 			Response:     denyResponse,
 			CacheControl: ComputeCacheControl(nil, now, ceiling, denyTTL),
+			Vary:         VaryIdentityHeaders,
 		}, fmt.Errorf("querying shares for VPC ARN %q: %w", sourceVpcArn, err)
 	}
 
@@ -138,6 +155,7 @@ func (h *CalloutHandler) HandleCalloutWithHeaders(ctx context.Context, sourceVpc
 		return &CalloutResult{
 			Response:     denyResponse,
 			CacheControl: ComputeCacheControl(nil, now, ceiling, denyTTL),
+			Vary:         VaryIdentityHeaders,
 		}, fmt.Errorf("unmarshaling share records: %w", err)
 	}
 
@@ -179,6 +197,7 @@ func (h *CalloutHandler) HandleCalloutWithHeaders(ctx context.Context, sourceVpc
 	return &CalloutResult{
 		Response:     response,
 		CacheControl: cacheControl,
+		Vary:         VaryIdentityHeaders,
 	}, nil
 }
 
@@ -189,12 +208,21 @@ func (h *CalloutHandler) HandleCalloutWithHeaders(ctx context.Context, sourceVpc
 //   - Unlimited shares (ExpiresAt == nil): use ceiling as their contribution
 //   - Expiring shares: remaining = ExpiresAt - now
 //   - Takes min(all remaining lifetimes), then caps at ceiling
-//   - Returns "max-age=<seconds>"
+//   - Returns "s-maxage=<seconds>, public" so a shared cache is permitted to
+//     store and reuse the response even when the callout request carries an
+//     Authorization header (RFC 9111 §3.5, Req 13.1).
 //
 // For deny responses (no active shares):
-//   - Returns "max-age=<denyTTL seconds>" for short negative caching
+//   - Returns "max-age=<denyTTL seconds>" for short negative caching (Req 13.2).
+//     This uses plain max-age rather than s-maxage so the deny response is also
+//     usable by a private cache, and because the deny path carries no credentials
+//     concern.
 //
-// Requirements: 13.1, 13.2
+// Where no safe lifetime can be determined (should not happen with the above
+// logic, but as a fallback):
+//   - Returns "no-store" (Req 13.4).
+//
+// Requirements: 13.1, 13.2, 13.4
 func ComputeCacheControl(records []*model.ShareRecord, now time.Time, ceiling time.Duration, denyTTL time.Duration) string {
 	if len(records) == 0 {
 		// Deny: short max-age for negative caching (Req 13.2)
@@ -232,5 +260,9 @@ func ComputeCacheControl(records []*model.ShareRecord, now time.Time, ceiling ti
 	}
 
 	seconds := int64(math.Floor(minRemaining.Seconds()))
-	return fmt.Sprintf("max-age=%d", seconds)
+
+	// Emit s-maxage + public so a shared cache (RFC 9111 §3.5) is explicitly
+	// permitted to store the response even when the request carries an
+	// Authorization header (Req 13.1).
+	return fmt.Sprintf("s-maxage=%d, public", seconds)
 }

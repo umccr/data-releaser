@@ -120,9 +120,25 @@ func runExtend(cmd *cobra.Command, args []string) error {
 	generator := manifest.NewGenerator(cfg.Endpoints.HtsgetBaseURL)
 	manifestDoc := generator.Generate(activeShares, now)
 
-	bucket := researcherBucketName(updated.ResearcherAccountID)
+	manifestBucket := strings.TrimSpace(cfg.Manifest.Bucket)
+	if manifestBucket == "" {
+		fmt.Fprintf(os.Stderr, "Warning: share extended but manifest.bucket is not configured; manifest not updated\n")
+		fmt.Printf("Share extended successfully:\n")
+		fmt.Printf("  Share ID:   %s\n", updated.ShareID)
+		fmt.Printf("  New Expiry: %s\n", updated.ExpiresAt.Format(time.RFC3339))
+		return fmt.Errorf("manifest.bucket not configured (share %s was extended)", updated.ShareID)
+	}
+	manifestKey, err := cfg.Manifest.RenderManifestKey(updated.ResearcherAccountID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: share extended but manifest key could not be resolved: %v\n", err)
+		fmt.Printf("Share extended successfully:\n")
+		fmt.Printf("  Share ID:   %s\n", updated.ShareID)
+		fmt.Printf("  New Expiry: %s\n", updated.ExpiresAt.Format(time.RFC3339))
+		return fmt.Errorf("manifest key resolution failed (share %s was extended): %w", updated.ShareID, err)
+	}
+
 	writer := manifest.NewWriter(factory.S3Client())
-	if err := writer.Sync(ctx, bucket, manifestDoc); err != nil {
+	if err := writer.Sync(ctx, manifestBucket, manifestKey, manifestDoc); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: share extended but manifest upload failed: %v\n", err)
 		fmt.Printf("Share extended successfully:\n")
 		fmt.Printf("  Share ID:   %s\n", updated.ShareID)

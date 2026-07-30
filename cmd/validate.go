@@ -48,11 +48,14 @@ func runValidate(cmd *cobra.Command, args []string) error {
 	httpClient := &http.Client{Timeout: 10 * time.Second}
 
 	opts := validate.ValidateProviderOpts{
-		STSClient:    factory.STSClient(),
-		AthenaClient: factory.AthenaClient(),
-		S3Client:     factory.S3Client(),
-		HTTPClient:   httpClient,
-		Config:       cfg,
+		STSClient:             factory.STSClient(),
+		AthenaClient:          factory.AthenaClient(),
+		S3Client:              factory.S3Client(),
+		DynamoDBClient:        factory.DynamoDBClient(),
+		APIGatewayClient:      factory.APIGatewayClient(),
+		HTTPClient:            httpClient,
+		Config:                cfg,
+		ShareRecordsTableName: ShareRecordsTableName,
 	}
 
 	checks := validate.ValidateProvider(ctx, opts)
@@ -82,9 +85,15 @@ func runValidate(cmd *cobra.Command, args []string) error {
 		fmt.Println("─────────────────────────────────────────────────────")
 
 		researcherOpts := validate.ValidateResearcherOpts{
-			RAMClient:    factory.RAMClient(),
-			LambdaClient: factory.LambdaClient(),
-			AccountID:    accountID,
+			RAMClient:      factory.RAMClient(),
+			LambdaClient:   factory.LambdaClient(),
+			S3Client:       factory.S3Client(),
+			AccountID:      accountID,
+			ManifestBucket: cfg.Manifest.Bucket,
+		}
+		// Resolve the account's manifest prefix for the cross-account read-grant check (Req 15.9).
+		if prefix, prefixErr := cfg.Manifest.RenderManifestPrefix(accountID); prefixErr == nil {
+			researcherOpts.ManifestPrefix = prefix
 		}
 
 		researcherChecks := validate.ValidateResearcher(ctx, researcherOpts)
