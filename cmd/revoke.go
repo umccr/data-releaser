@@ -49,7 +49,7 @@ func runRevoke(cmd *cobra.Command, args []string) error {
 	}
 
 	// --- Step 2: Revoke the share via auth service (Req 3.1) ---
-	store := auth.NewShareStore(factory.DynamoDBClient(), ShareRecordsTableName)
+	store := auth.NewShareStore(factory.DynamoDBClient(), shareRecordsTable())
 
 	record, err := store.Revoke(ctx, shareID)
 	if err != nil {

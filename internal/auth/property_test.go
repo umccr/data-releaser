@@ -148,8 +148,8 @@ func TestProperty1_FailClosed(t *testing.T) {
 
 		// Every returned location must be backed by an active record's prefix.
 		for _, loc := range result.Response.HtsgetAuth {
-			if !allowed[loc.Location.ID] {
-				t.Fatalf("returned location %q is not authorized by any active record (fail-closed violation)", loc.Location.ID)
+			if !allowed[loc.Location.Prefix] {
+				t.Fatalf("returned location %q is not authorized by any active record (fail-closed violation)", loc.Location.Prefix)
 			}
 		}
 	})
@@ -222,8 +222,8 @@ func TestProperty2_PerResearcherIsolation(t *testing.T) {
 			t.Fatalf("unexpected error for account A: %v", err)
 		}
 		for _, loc := range resA.HtsgetAuth {
-			if strings.HasPrefix(loc.Location.ID, bTag) {
-				t.Fatalf("account A received account B's location %q (isolation violation)", loc.Location.ID)
+			if strings.HasPrefix(loc.Location.Prefix, bTag) {
+				t.Fatalf("account A received account B's location %q (isolation violation)", loc.Location.Prefix)
 			}
 		}
 
@@ -233,8 +233,8 @@ func TestProperty2_PerResearcherIsolation(t *testing.T) {
 			t.Fatalf("unexpected error for account B: %v", err)
 		}
 		for _, loc := range resB.HtsgetAuth {
-			if strings.HasPrefix(loc.Location.ID, aTag) {
-				t.Fatalf("account B received account A's location %q (isolation violation)", loc.Location.ID)
+			if strings.HasPrefix(loc.Location.Prefix, aTag) {
+				t.Fatalf("account B received account A's location %q (isolation violation)", loc.Location.Prefix)
 			}
 		}
 	})

@@ -15,12 +15,90 @@ import (
 
 // Config represents the full application configuration.
 type Config struct {
-	Profile    string           `yaml:"profile"`
-	Warehouse  WarehouseConfig  `yaml:"warehouse"`
-	Endpoints  EndpointsConfig  `yaml:"endpoints"`
-	Cache      CacheConfig      `yaml:"cache"`
-	Validation ValidationConfig `yaml:"validation"`
-	Manifest   ManifestConfig   `yaml:"manifest"`
+	Profile       string              `yaml:"profile"`
+	Warehouse     WarehouseConfig     `yaml:"warehouse"`
+	Endpoints     EndpointsConfig     `yaml:"endpoints"`
+	Cache         CacheConfig         `yaml:"cache"`
+	Validation    ValidationConfig    `yaml:"validation"`
+	Manifest      ManifestConfig      `yaml:"manifest"`
+	Authorization AuthorizationConfig `yaml:"authorization"`
+	// Researchers maps a researcher AWS account ID to its per-account settings.
+	Researchers map[string]ResearcherConfig `yaml:"researchers"`
+}
+
+// AuthorizationConfig holds settings for the Authorization Service's store.
+type AuthorizationConfig struct {
+	// ShareRecordsTable is the DynamoDB table holding Share_Records. The
+	// Infrastructure_Stack creates it as "<namePrefix>-ShareRecords", so this must be
+	// sourced from that stack's output rather than hard-coded. Defaults to
+	// DefaultShareRecordsTable, which matches the stack's default name prefix.
+	ShareRecordsTable string `yaml:"shareRecordsTable"`
+}
+
+// DefaultShareRecordsTable is the Share_Records table name produced by the
+// Infrastructure_Stack under its default "data-releaser" name prefix.
+const DefaultShareRecordsTable = "data-releaser-ShareRecords"
+
+// ResearcherConfig holds the per-account settings for one Researcher_Account.
+type ResearcherConfig struct {
+	// TargetVpcArn is the ARN of the researcher VPC that is associated with the
+	// htsget VPC Lattice service network.
+	//
+	// This is the identity the authorization callout is keyed on, and it must be the
+	// value htsget-rs actually forwards. VPC Lattice puts the *EC2 VPC* ARN of the
+	// calling VPC on the invocation event
+	// (`$.requestContext.identity.sourceVpcArn`), so the form is
+	// "arn:aws:ec2:<region>:<account>:vpc/vpc-<id>" — not a vpc-lattice ARN. The
+	// authorization lookup is an exact-match query on a DynamoDB GSI, so any other
+	// value silently denies every request.
+	TargetVpcArn string `yaml:"targetVpcArn"`
+}
+
+// vpcArnRe matches an EC2 VPC ARN, the form VPC Lattice reports as the source of an
+// invocation and therefore the only form that can match a forwarded identity.
+var vpcArnRe = regexp.MustCompile(`^arn:aws[a-z-]*:ec2:[a-z0-9-]+:\d{12}:vpc/vpc-[0-9a-f]+$`)
+
+// ValidateTargetVpcArn checks that arn is a well-formed EC2 VPC ARN and, when
+// accountID is non-empty, that it belongs to that account. Catching this at share
+// time matters because a malformed ARN produces no error downstream — it is simply
+// written to the store and then never matches an authorization callout.
+func ValidateTargetVpcArn(arn, accountID string) error {
+	if !vpcArnRe.MatchString(arn) {
+		return fmt.Errorf(
+			"target VPC ARN %q is not a valid EC2 VPC ARN; expected the form "+
+				"arn:aws:ec2:<region>:<account-id>:vpc/vpc-<id>, which is what VPC Lattice "+
+				"reports as the source of a request", arn)
+	}
+	if accountID != "" {
+		parts := strings.Split(arn, ":")
+		if parts[4] != accountID {
+			return fmt.Errorf(
+				"target VPC ARN %q belongs to account %s but the share targets account %s",
+				arn, parts[4], accountID)
+		}
+	}
+	return nil
+}
+
+// ResolveTargetVpcArn returns the configured target VPC ARN for a researcher account.
+// It returns an error when the account has no entry, because there is no safe value to
+// fall back to: a guessed ARN would never match a real request.
+func (cfg *Config) ResolveTargetVpcArn(accountID string) (string, error) {
+	researcher, ok := cfg.Researchers[accountID]
+	if !ok || strings.TrimSpace(researcher.TargetVpcArn) == "" {
+		return "", fmt.Errorf(
+			"no target VPC ARN configured for researcher account %s; add it under "+
+				"researchers.%s.targetVpcArn in the config file, or pass --target-vpc-arn. "+
+				"It is the ARN of the researcher VPC associated with the htsget VPC Lattice "+
+				"service network, e.g. arn:aws:ec2:ap-southeast-2:%s:vpc/vpc-0123456789abcdef0",
+			accountID, accountID, accountID)
+	}
+
+	arn := strings.TrimSpace(researcher.TargetVpcArn)
+	if err := ValidateTargetVpcArn(arn, accountID); err != nil {
+		return "", fmt.Errorf("researchers.%s.targetVpcArn: %w", accountID, err)
+	}
+	return arn, nil
 }
 
 // ManifestConfig holds the Manifest_Bucket settings. The bucket is a single
@@ -106,6 +184,23 @@ type CacheConfig struct {
 // ValidationConfig holds optional validation/canary settings.
 type ValidationConfig struct {
 	Canary *CanaryConfig `yaml:"canary"`
+
+	// SkipHtsgetCheck disables the direct htsget-rs /service-info health check.
+	//
+	// Set this when htsget-rs is fronted by VPC Lattice: its domain only resolves from
+	// inside an associated VPC, so the check fails from an operator's machine even
+	// though the deployment is healthy. Verify htsget-rs from inside the consumer VPC
+	// instead.
+	SkipHtsgetCheck bool `yaml:"skipHtsgetCheck"`
+
+	// SkipAuthorizationCheck disables the Authorization Service reachability probe.
+	//
+	// Set this when the authorization API is deployed as a private API Gateway
+	// endpoint (the default): it is served by an interface endpoint inside the data
+	// account VPC, so its hostname does not resolve from an operator's machine and
+	// the resource policy denies anything arriving another way. The check would fail
+	// on a healthy deployment. Verify the callout from inside that VPC instead.
+	SkipAuthorizationCheck bool `yaml:"skipAuthorizationCheck"`
 }
 
 // CanaryConfig holds the canary dataset reference for test-setup mode.
@@ -218,6 +313,9 @@ func applyDefaults(cfg *Config) {
 	if cfg.Manifest.KeyTemplate == "" {
 		cfg.Manifest.KeyTemplate = DefaultManifestKeyTemplate
 	}
+	if cfg.Authorization.ShareRecordsTable == "" {
+		cfg.Authorization.ShareRecordsTable = DefaultShareRecordsTable
+	}
 }
 
 // validate checks that all required fields are present and valid.
@@ -240,6 +338,20 @@ func validate(cfg *Config) error {
 	// Validate the manifest key template renders and rejects unknown placeholders (Req 7.2).
 	if _, err := cfg.Manifest.RenderManifestKey("000000000000"); err != nil {
 		errs = append(errs, err.Error())
+	}
+
+	// Reject malformed researcher VPC ARNs up front. These are only read at share time,
+	// and a bad value there fails silently at request time rather than loudly at write
+	// time, so it is worth catching whenever the config is loaded.
+	for accountID, researcher := range cfg.Researchers {
+		arn := strings.TrimSpace(researcher.TargetVpcArn)
+		if arn == "" {
+			errs = append(errs, fmt.Sprintf("researchers.%s.targetVpcArn is required", accountID))
+			continue
+		}
+		if err := ValidateTargetVpcArn(arn, accountID); err != nil {
+			errs = append(errs, fmt.Sprintf("researchers.%s.targetVpcArn: %v", accountID, err))
+		}
 	}
 
 	if len(errs) > 0 {

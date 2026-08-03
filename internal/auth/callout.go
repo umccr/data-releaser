@@ -19,21 +19,36 @@ import (
 const GSI1IndexName = "GSI1"
 
 // LocationEntry represents a single location in the htsgetAuth response.
+//
+// This maps onto htsget-rs's `AuthorizationRule`, which accepts exactly two
+// fields: `location` and an optional `rules`.
 type LocationEntry struct {
-	// Location contains the S3 prefix identifier and backend configuration.
+	// Location contains the S3 key prefix that the htsget id must start with.
 	Location LocationID `json:"location"`
 
 	// Rules is an optional array of AccessRules. Omitted means unrestricted access.
 	Rules []model.AccessRule `json:"rules,omitempty"`
 }
 
-// LocationID contains the identifier and backend for a location entry.
+// LocationID contains the prefix matcher for a location entry.
+//
+// It deserialises in htsget-rs as a `LocationWrapper::String` carrying only a
+// `PrefixOrId::Prefix`. Two deliberate choices:
+//
+//   - `prefix`, not `id`. htsget-rs matches `id` by equality against the request
+//     path (e.g. "demo/L2400001/NA12878"), whereas a share grants access to a
+//     directory (e.g. "demo/L2400001/"). Only `prefix` has the right semantics.
+//
+//   - No backend. Omitting it leaves htsget-rs with a defaulted backend, which
+//     `into_remote_locations()` filters out, so htsget-rs resolves the object
+//     against its own statically configured location instead. The share decides
+//     *what* may be read; the htsget-rs deployment decides *where from*. Emitting
+//     a backend here would require this service to know the storage topology and
+//     would force htsget-rs to hold broad S3 read permissions.
 type LocationID struct {
-	// ID is the S3 prefix for the location.
-	ID string `json:"id"`
-
-	// Backend is the backend configuration (empty object for S3).
-	Backend map[string]interface{} `json:"backend"`
+	// Prefix is the bucket-less S3 key prefix for the location, e.g.
+	// "demo/L2400001/". It is matched with `starts_with` against the htsget id.
+	Prefix string `json:"prefix"`
 }
 
 // CalloutResponse represents the htsget-rs authorization callout response.
@@ -96,6 +111,16 @@ func (h *CalloutHandler) HandleCallout(ctx context.Context, sourceVpcArn string)
 	return result.Response, nil
 }
 
+// SourceVpcArnHeader is the request header carrying the requester's source VPC
+// ARN on an htsget-rs authorization callout.
+//
+// htsget-rs forwards configured context values as headers named with its
+// `Htsget-Context-` prefix, so a `forward.context.extensions` entry of
+// `{ json_path = "$.requestContext.identity.sourceVpcArn", name = "SourceVpcArn" }`
+// arrives as this header. htsget-rs issues the callout as a bare GET with
+// headers only, so this is the only channel the identity travels over.
+const SourceVpcArnHeader = "Htsget-Context-SourceVpcArn"
+
 // VaryIdentityHeaders is the Vary header value the Authorization_Service emits
 // on every callout response (Req 13.3). It names the forwarded identity header(s)
 // that the authorization decision depends on, so that:
@@ -104,7 +129,7 @@ func (h *CalloutHandler) HandleCallout(ctx context.Context, sourceVpcArn string)
 //
 // Per-requester isolation itself rests on the declared cache key in htsget-rs
 // (Req 14.4), NOT on this header.
-const VaryIdentityHeaders = "X-Forwarded-Source-Vpc-Arn"
+const VaryIdentityHeaders = SourceVpcArnHeader
 
 // HandleCalloutWithHeaders processes an authorization callout for the given source VPC ARN
 // and computes the Cache-Control header value based on the matched shares' remaining lifetimes.
@@ -174,10 +199,7 @@ func (h *CalloutHandler) HandleCalloutWithHeaders(ctx context.Context, sourceVpc
 		// Each active share contributes its S3 prefixes as location entries
 		for _, prefix := range record.S3Prefixes {
 			locations = append(locations, LocationEntry{
-				Location: LocationID{
-					ID:      prefix,
-					Backend: map[string]interface{}{},
-				},
+				Location: LocationID{Prefix: prefix},
 			})
 		}
 	}

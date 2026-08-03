@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/umccr/data-releaser/internal/config"
 	"github.com/umccr/data-releaser/internal/model"
 )
 
@@ -44,14 +45,51 @@ func TestParseDuration(t *testing.T) {
 	}
 }
 
-func TestDeriveTargetVpcArn(t *testing.T) {
-	account := "534840902377"
-	arn := deriveTargetVpcArn(account)
-	if !strings.Contains(arn, account) {
-		t.Errorf("expected ARN to contain account %q, got %q", account, arn)
+func TestResolveTargetVpcArn(t *testing.T) {
+	const account = "534840902377"
+	const arn = "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-0123456789abcdef0"
+
+	cfg := &config.Config{
+		Researchers: map[string]config.ResearcherConfig{
+			account: {TargetVpcArn: arn},
+		},
 	}
-	if !strings.HasPrefix(arn, "arn:aws:vpc-lattice:") {
-		t.Errorf("expected a vpc-lattice ARN, got %q", arn)
+
+	// The flag takes precedence over the config entry.
+	flagArn := "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-aaaaaaaaaaaaaaaaa"
+	got, err := resolveTargetVpcArn(cfg, flagArn, account)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != flagArn {
+		t.Errorf("resolveTargetVpcArn with flag = %q, want %q", got, flagArn)
+	}
+
+	// Falling back to the config entry.
+	got, err = resolveTargetVpcArn(cfg, "", account)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != arn {
+		t.Errorf("resolveTargetVpcArn from config = %q, want %q", got, arn)
+	}
+
+	// An unconfigured account is an error, not a derived placeholder: a guessed ARN
+	// would create a share that silently never authorizes anything.
+	if _, err := resolveTargetVpcArn(cfg, "", "111111111111"); err == nil {
+		t.Error("expected an error for an account with no configured target VPC ARN")
+	}
+
+	// The legacy vpc-lattice ARN shape is rejected — VPC Lattice reports the EC2 VPC ARN.
+	legacy := "arn:aws:vpc-lattice:ap-southeast-2:534840902377:servicenetworkserviceassociation/*"
+	if _, err := resolveTargetVpcArn(cfg, legacy, account); err == nil {
+		t.Error("expected a vpc-lattice service-network-association ARN to be rejected")
+	}
+
+	// An ARN for a different account than the share targets is rejected.
+	otherAccount := "arn:aws:ec2:ap-southeast-2:111111111111:vpc/vpc-0123456789abcdef0"
+	if _, err := resolveTargetVpcArn(cfg, otherAccount, account); err == nil {
+		t.Error("expected an ARN from a different account to be rejected")
 	}
 }
 

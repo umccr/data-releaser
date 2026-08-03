@@ -8,9 +8,19 @@ import (
 	"github.com/umccr/data-releaser/internal/config"
 )
 
-// ShareRecordsTableName is the DynamoDB table name for share records,
-// used by all subcommands that interact with the authorization store.
-const ShareRecordsTableName = "ShareRecords"
+// shareRecordsTable returns the DynamoDB table name for Share_Records, used by all
+// subcommands that interact with the authorization store.
+//
+// The Infrastructure_Stack creates the table as "<namePrefix>-ShareRecords", so this
+// cannot be a bare constant: a stack deployed under a non-default name prefix would
+// not be found. It comes from config, falling back to the name the stack produces
+// under its default prefix.
+func shareRecordsTable() string {
+	if cfg := GetConfig(); cfg != nil && cfg.Authorization.ShareRecordsTable != "" {
+		return cfg.Authorization.ShareRecordsTable
+	}
+	return config.DefaultShareRecordsTable
+}
 
 var (
 	cfgFile string

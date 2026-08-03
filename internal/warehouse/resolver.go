@@ -32,6 +32,51 @@ func DerivePrefix(key string) string {
 	return dir + "/"
 }
 
+// DeriveHtsgetID returns the htsget resource id for an S3 object key.
+//
+// htsget-rs addresses a record by an id that omits the format extension and appends
+// it back when resolving the object, so the file at key "demo/L2400001/NA12878.bam"
+// is requested as "/reads/demo/L2400001/NA12878". The id is bucket-less for the same
+// reason the prefixes are: the bucket is part of the htsget-rs deployment's own
+// location config, not of the share.
+//
+// Only a trailing extension matching the row's format is removed. A key whose
+// extension does not match the format is returned unchanged rather than guessed at,
+// since truncating an unexpected suffix would produce an id that resolves to nothing.
+func DeriveHtsgetID(key, format string) string {
+	format = strings.TrimPrefix(strings.ToLower(strings.TrimSpace(format)), ".")
+	if format == "" {
+		return key
+	}
+
+	ext := path.Ext(key)
+	if strings.ToLower(strings.TrimPrefix(ext, ".")) != format {
+		return key
+	}
+	return strings.TrimSuffix(key, ext)
+}
+
+// ExtractFiles converts resolved warehouse rows into the per-file records a share
+// carries, so that a manifest can name the exact htsget request path for each file.
+// The order is the resolution order, deduplicated by htsget id.
+func ExtractFiles(resolved []model.ResolvedLibrary) []model.ShareFile {
+	seen := make(map[string]bool)
+	var files []model.ShareFile
+	for _, r := range resolved {
+		id := DeriveHtsgetID(r.Key, r.Format)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		files = append(files, model.ShareFile{
+			LibraryID: r.LibraryID,
+			HtsgetID:  id,
+			Format:    strings.ToLower(strings.TrimSpace(r.Format)),
+		})
+	}
+	return files
+}
+
 // IsArchivedStorageClass returns true if the given storage class is an archived tier
 // (DeepArchive, Glacier, Glacier_IR). The check is case-insensitive.
 func IsArchivedStorageClass(storageClass string) bool {

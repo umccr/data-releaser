@@ -61,8 +61,11 @@ func TestGenerate_SingleActiveShare(t *testing.T) {
 			ResearcherAccountID: "123456789",
 			LibraryIDs:          []string{"L2400001"},
 			S3Prefixes:          []string{"s3://bucket/prefix/"},
-			CreatedAt:           now.Add(-time.Hour),
-			ExpiresAt:           &expiry,
+			Files: []model.ShareFile{
+				{LibraryID: "L2400001", HtsgetID: "demo/L2400001/NA12878", Format: "bam"},
+			},
+			CreatedAt: now.Add(-time.Hour),
+			ExpiresAt: &expiry,
 		},
 	}
 
@@ -92,8 +95,8 @@ func TestGenerate_SingleActiveShare(t *testing.T) {
 	if len(lib.Files) != 1 {
 		t.Fatalf("expected 1 file, got %d", len(lib.Files))
 	}
-	if lib.Files[0].Request != "reads/L2400001" {
-		t.Errorf("Request: expected %q, got %q", "reads/L2400001", lib.Files[0].Request)
+	if lib.Files[0].Request != "reads/demo/L2400001/NA12878" {
+		t.Errorf("Request: expected %q, got %q", "reads/demo/L2400001/NA12878", lib.Files[0].Request)
 	}
 	if lib.Files[0].Rules != nil {
 		t.Errorf("expected nil rules for unrestricted access, got %v", lib.Files[0].Rules)
@@ -366,8 +369,11 @@ func TestGenerate_JSONOutputConformsToSchema(t *testing.T) {
 			ResearcherAccountID: "123456789",
 			LibraryIDs:          []string{"L2400001"},
 			S3Prefixes:          []string{"s3://bucket/prefix/"},
-			CreatedAt:           now.Add(-time.Hour),
-			ExpiresAt:           &expiry,
+			Files: []model.ShareFile{
+				{LibraryID: "L2400001", HtsgetID: "demo/L2400001/NA12878", Format: "bam"},
+			},
+			CreatedAt: now.Add(-time.Hour),
+			ExpiresAt: &expiry,
 		},
 	}
 
@@ -399,7 +405,10 @@ func TestGenerate_JSONOutputConformsToSchema(t *testing.T) {
 	if decoded.Libraries[0].LibraryID != "L2400001" {
 		t.Errorf("decoded LibraryID mismatch")
 	}
-	if decoded.Libraries[0].Files[0].Request != "reads/L2400001" {
+	if len(decoded.Libraries[0].Files) != 1 {
+		t.Fatalf("decoded files count mismatch: got %d", len(decoded.Libraries[0].Files))
+	}
+	if decoded.Libraries[0].Files[0].Request != "reads/demo/L2400001/NA12878" {
 		t.Errorf("decoded request path mismatch: got %q", decoded.Libraries[0].Files[0].Request)
 	}
 }
@@ -414,7 +423,11 @@ func TestGenerate_HtsgetRequestPaths(t *testing.T) {
 			ResearcherAccountID: "123456789",
 			LibraryIDs:          []string{"L2400001", "L2400002"},
 			S3Prefixes:          []string{"s3://bucket/p1/", "s3://bucket/p2/"},
-			CreatedAt:           now.Add(-time.Hour),
+			Files: []model.ShareFile{
+				{LibraryID: "L2400001", HtsgetID: "p1/NA12878", Format: "bam"},
+				{LibraryID: "L2400002", HtsgetID: "p2/NA12879", Format: "bam"},
+			},
+			CreatedAt: now.Add(-time.Hour),
 		},
 	}
 
@@ -423,15 +436,94 @@ func TestGenerate_HtsgetRequestPaths(t *testing.T) {
 		t.Fatal("expected non-nil manifest")
 	}
 
-	// Verify request paths follow reads/<library_id> pattern
+	// The request path is reads/<htsgetId> — the object key minus bucket and format
+	// extension. Each library's files must come from that library's records only.
+	want := map[string]string{
+		"L2400001": "reads/p1/NA12878",
+		"L2400002": "reads/p2/NA12879",
+	}
 	for _, lib := range result.Libraries {
 		if len(lib.Files) != 1 {
 			t.Fatalf("expected 1 file per library, got %d for %s", len(lib.Files), lib.LibraryID)
 		}
-		expected := "reads/" + lib.LibraryID
-		if lib.Files[0].Request != expected {
-			t.Errorf("library %s: expected request %q, got %q", lib.LibraryID, expected, lib.Files[0].Request)
+		if lib.Files[0].Request != want[lib.LibraryID] {
+			t.Errorf("library %s: expected request %q, got %q", lib.LibraryID, want[lib.LibraryID], lib.Files[0].Request)
 		}
+	}
+}
+
+// A share written before per-file recording existed carries no Files. The library must
+// still appear (its prefixes are authorized) but with an empty file list rather than a
+// fabricated reads/<library_id> path that htsget-rs would 404 on.
+func TestGenerate_ShareWithoutRecordedFiles(t *testing.T) {
+	g := NewGenerator("https://htsget.example.com")
+	now := time.Now().UTC()
+
+	shares := []model.ShareRecord{
+		{
+			ShareID:             "legacy-share",
+			ResearcherAccountID: "123456789",
+			LibraryIDs:          []string{"L2400001"},
+			S3Prefixes:          []string{"s3://bucket/p1/"},
+			CreatedAt:           now.Add(-time.Hour),
+		},
+	}
+
+	result := g.Generate(shares, now)
+	if result == nil {
+		t.Fatal("expected non-nil manifest")
+	}
+	if len(result.Libraries) != 1 {
+		t.Fatalf("expected 1 library, got %d", len(result.Libraries))
+	}
+	if len(result.Libraries[0].Files) != 0 {
+		t.Errorf("expected no files for a share with no recorded files, got %v", result.Libraries[0].Files)
+	}
+}
+
+// Several shares granting the same library must not produce duplicate request paths.
+func TestGenerate_DeduplicatesFilesAcrossShares(t *testing.T) {
+	g := NewGenerator("https://htsget.example.com")
+	now := time.Now().UTC()
+
+	file := model.ShareFile{LibraryID: "L2400001", HtsgetID: "p1/NA12878", Format: "bam"}
+	shares := []model.ShareRecord{
+		{
+			ShareID:             "share-1",
+			ResearcherAccountID: "123456789",
+			LibraryIDs:          []string{"L2400001"},
+			S3Prefixes:          []string{"s3://bucket/p1/"},
+			Files:               []model.ShareFile{file},
+			CreatedAt:           now.Add(-2 * time.Hour),
+		},
+		{
+			ShareID:             "share-2",
+			ResearcherAccountID: "123456789",
+			LibraryIDs:          []string{"L2400001"},
+			S3Prefixes:          []string{"s3://bucket/p1/"},
+			Files: []model.ShareFile{
+				file,
+				{LibraryID: "L2400001", HtsgetID: "p1/NA12879", Format: "bam"},
+			},
+			CreatedAt: now.Add(-time.Hour),
+		},
+	}
+
+	result := g.Generate(shares, now)
+	if result == nil {
+		t.Fatal("expected non-nil manifest")
+	}
+	if len(result.Libraries) != 1 {
+		t.Fatalf("expected 1 library, got %d", len(result.Libraries))
+	}
+
+	files := result.Libraries[0].Files
+	if len(files) != 2 {
+		t.Fatalf("expected 2 deduplicated files, got %d (%v)", len(files), files)
+	}
+	// Sorted by request path for a stable manifest.
+	if files[0].Request != "reads/p1/NA12878" || files[1].Request != "reads/p1/NA12879" {
+		t.Errorf("unexpected file order/content: %v", files)
 	}
 }
 

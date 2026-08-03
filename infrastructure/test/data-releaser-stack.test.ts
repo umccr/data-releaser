@@ -35,6 +35,10 @@ function buildStack(opts: {
     cacheDenyTtl: "60s",
     encryption: opts.encryption,
     provisionOperatorPolicy: opts.provisionOperatorPolicy,
+    // Vpc.fromLookup resolves to CDK's dummy VPC without a real context lookup,
+    // which is enough to synthesise the endpoint, the resource policy and the
+    // Lambda VpcConfigs.
+    apiVpcId: "vpc-12345",
   });
   return Template.fromStack(stack);
 }
@@ -117,17 +121,153 @@ describe("API Gateway (Req 16.3)", () => {
     }
   });
 
-  it("requires the requester identity (sourceVpcArn) on the callout method", () => {
-    t.hasResourceProperties("AWS::ApiGateway::Method", {
-      HttpMethod: "GET",
-      RequestParameters: { "method.request.querystring.sourceVpcArn": true },
-    });
-
-    // No integration declares cache key parameters — there is no gateway cache.
+  it("does not require any request parameter on the callout method", () => {
+    // htsget-rs sends the callout as a bare GET with the identity in the
+    // Htsget-Context-SourceVpcArn header. A required query-string parameter would
+    // make API Gateway reject every callout with a 400 before the Lambda runs.
     const methods = t.findResources("AWS::ApiGateway::Method");
     for (const key of Object.keys(methods)) {
+      const params = methods[key].Properties?.RequestParameters ?? {};
+      for (const name of Object.keys(params)) {
+        expect(name.startsWith("method.request.querystring.")).toBe(false);
+      }
+
+      // No integration declares cache key parameters — there is no gateway cache.
       const integration = methods[key].Properties?.Integration ?? {};
       expect(integration.CacheKeyParameters).toBeUndefined();
+    }
+  });
+
+  it("requires SigV4 on every admin method and leaves only the callout open", () => {
+    // /admin/* creates, revokes and extends shares. Unauthenticated, anyone who
+    // finds the invoke URL could grant themselves access to the data bucket.
+    const methods = t.findResources("AWS::ApiGateway::Method");
+    const resources = t.findResources("AWS::ApiGateway::Resource");
+
+    // Map logical id -> path part so a method can be attributed to a path.
+    const pathPart = (ref: any): string =>
+      ref?.Ref ? (resources[ref.Ref]?.Properties?.PathPart ?? "") : "";
+
+    const open: string[] = [];
+    for (const key of Object.keys(methods)) {
+      const props = methods[key].Properties ?? {};
+      const part = pathPart(props.ResourceId);
+      const authType = props.AuthorizationType;
+      if (part === "authorize") {
+        // htsget-rs sends an unsigned GET; IAM auth here rejects every callout.
+        expect(authType).toBe("NONE");
+      } else {
+        expect(authType).toBe("AWS_IAM");
+      }
+      if (authType === "NONE") {
+        open.push(`${props.HttpMethod} ${part}`);
+      }
+      // No API-key shortcut around IAM either.
+      expect(props.ApiKeyRequired).toBeFalsy();
+    }
+
+    // Exactly one open route, and it is the callout.
+    expect(open).toEqual(["GET authorize"]);
+  });
+
+  it("is a PRIVATE endpoint bound to the interface endpoint", () => {
+    // The callout carries no credential of any kind, so reachability is the only
+    // control available for GET /authorize. PRIVATE means the hostname does not
+    // resolve outside a VPC that has the endpoint.
+    t.hasResourceProperties("AWS::ApiGateway::RestApi", {
+      EndpointConfiguration: {
+        Types: ["PRIVATE"],
+        VpcEndpointIds: [Match.anyValue()],
+      },
+    });
+    t.hasResourceProperties("AWS::EC2::VPCEndpoint", {
+      VpcEndpointType: "Interface",
+      PrivateDnsEnabled: true,
+    });
+  });
+
+  it("denies every request that did not arrive through that endpoint", () => {
+    const apis = t.findResources("AWS::ApiGateway::RestApi");
+    const policy = Object.values(apis)[0].Properties.Policy;
+    expect(policy).toBeDefined();
+
+    const allow = policy.Statement.find((s: any) => s.Effect === "Allow");
+    const deny = policy.Statement.find((s: any) => s.Effect === "Deny");
+
+    // An allow alone would leave the door open to any future identity-policy
+    // grant; the explicit deny is what makes the endpoint a hard boundary.
+    expect(allow.Condition.StringEquals["aws:SourceVpce"]).toBeDefined();
+    expect(deny).toBeDefined();
+    expect(deny.Condition.StringNotEquals["aws:SourceVpce"]).toBeDefined();
+    expect(deny.Action).toBe("execute-api:Invoke");
+    expect(deny.Principal).toEqual({ AWS: "*" });
+  });
+
+  it("only opens 443 to the VPC's own address space", () => {
+    t.hasResourceProperties("AWS::EC2::SecurityGroup", {
+      SecurityGroupIngress: Match.arrayWith([
+        Match.objectLike({ FromPort: 443, ToPort: 443, IpProtocol: "tcp" }),
+      ]),
+    });
+    const sgs = t.findResources("AWS::EC2::SecurityGroup");
+    for (const sg of Object.values(sgs)) {
+      for (const rule of (sg as any).Properties.SecurityGroupIngress ?? []) {
+        expect(rule.CidrIp).not.toBe("0.0.0.0/0");
+      }
+    }
+  });
+
+  it("grants operators execute-api:Invoke on /admin/* and nothing wider", () => {
+    const withPolicy = synth({ provisionOperatorPolicy: true });
+    const managed = withPolicy.findResources("AWS::IAM::ManagedPolicy");
+    const doc = Object.values(managed)[0].Properties.PolicyDocument;
+    const invoke = doc.Statement.find((s: any) => s.Sid === "InvokeAdminApi");
+    expect(invoke).toBeDefined();
+    expect(invoke.Action).toBe("execute-api:Invoke");
+    const serialized = JSON.stringify(invoke.Resource);
+    expect(serialized).toContain("/admin/*");
+    expect(serialized).not.toContain("/*/*");
+  });
+});
+
+describe("Lambda functions run inside the VPC", () => {
+  const t = synth();
+
+  it("attaches every function to VPC subnets with a security group", () => {
+    const functions = t.findResources("AWS::Lambda::Function");
+    expect(Object.keys(functions)).toHaveLength(2);
+    for (const fn of Object.values(functions)) {
+      const vpcConfig = (fn as any).Properties.VpcConfig;
+      expect(vpcConfig).toBeDefined();
+      expect(vpcConfig.SubnetIds.length).toBeGreaterThan(0);
+      expect(vpcConfig.SecurityGroupIds.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("uses the VPC execution role variant on both function roles", () => {
+    const roles = t.findResources("AWS::IAM::Role");
+    const lambdaRoles = Object.values(roles).filter((r: any) =>
+      JSON.stringify(r.Properties.AssumeRolePolicyDocument).includes(
+        "lambda.amazonaws.com",
+      ),
+    );
+    expect(lambdaRoles).toHaveLength(2);
+    for (const role of lambdaRoles) {
+      const arns = JSON.stringify((role as any).Properties.ManagedPolicyArns);
+      expect(arns).toContain("AWSLambdaVPCAccessExecutionRole");
+    }
+  });
+
+  it("gives the Lambda security group no ingress and only HTTPS egress", () => {
+    const sgs = t.findResources("AWS::EC2::SecurityGroup");
+    const lambdaSg: any = Object.values(sgs).find((sg: any) =>
+      (sg.Properties.GroupDescription ?? "").includes("Lambda functions"),
+    );
+    expect(lambdaSg).toBeDefined();
+    expect(lambdaSg.Properties.SecurityGroupIngress).toBeUndefined();
+    for (const rule of lambdaSg.Properties.SecurityGroupEgress ?? []) {
+      expect(rule.FromPort).toBe(443);
+      expect(rule.ToPort).toBe(443);
     }
   });
 });

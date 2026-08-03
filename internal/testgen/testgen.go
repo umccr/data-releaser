@@ -23,18 +23,30 @@ func AccountID(t *rapid.T) string {
 	return rapid.StringMatching(`[1-9][0-9]{11}`).Draw(t, "accountId")
 }
 
-// VPCArn generates a VPC Lattice service-network-association ARN for a randomly
-// generated account. This mirrors the requester identity the authorization
-// callout keys on (targetVpcArn / GSI1).
+// VPCArn generates an EC2 VPC ARN for a randomly generated account. This mirrors
+// the requester identity the authorization callout keys on (targetVpcArn / GSI1).
 func VPCArn(t *rapid.T) string {
 	return VPCArnForAccount(AccountID(t))
 }
 
-// VPCArnForAccount builds a VPC Lattice service-network-association ARN for the
-// given account ID, matching the shape produced by the share command's
-// deriveTargetVpcArn helper.
+// VPCArnForAccount builds an EC2 VPC ARN for the given account ID, matching the
+// shape VPC Lattice reports on the invocation event as
+// `$.requestContext.identity.sourceVpcArn` and therefore the shape a Share_Record's
+// targetVpcArn must have to ever match a callout.
 func VPCArnForAccount(accountID string) string {
-	return fmt.Sprintf("arn:aws:vpc-lattice:ap-southeast-2:%s:servicenetworkserviceassociation/*", accountID)
+	return fmt.Sprintf("arn:aws:ec2:ap-southeast-2:%s:vpc/vpc-%012x", accountID, hashAccount(accountID))
+}
+
+// hashAccount derives a stable pseudo VPC id from an account ID so that generated
+// ARNs are distinct per account and reproducible across calls.
+func hashAccount(accountID string) uint64 {
+	// FNV-1a, inlined to keep this package dependency-free beyond rapid and the model.
+	var h uint64 = 14695981039346656037
+	for i := 0; i < len(accountID); i++ {
+		h ^= uint64(accountID[i])
+		h *= 1099511628211
+	}
+	return h & 0xffffffffffff
 }
 
 // DistinctAccountIDs generates two distinct account IDs, useful for

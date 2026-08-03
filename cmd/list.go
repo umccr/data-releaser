@@ -51,7 +51,7 @@ func runList(cmd *cobra.Command, args []string) error {
 	}
 
 	// Create the share store.
-	store := auth.NewShareStore(factory.DynamoDBClient(), ShareRecordsTableName)
+	store := auth.NewShareStore(factory.DynamoDBClient(), shareRecordsTable())
 
 	// Query shares.
 	var records []*model.ShareRecord

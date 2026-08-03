@@ -1,5 +1,6 @@
 import * as path from "path";
 import {
+  Aspects,
   Stack,
   StackProps,
   Duration,
@@ -11,8 +12,10 @@ import {
   aws_s3 as s3,
   aws_kms as kms,
   aws_iam as iam,
+  aws_ec2 as ec2,
 } from "aws-cdk-lib";
 import { Construct } from "constructs";
+import { VpcOnlyAspect } from "./vpc-only-aspect";
 
 /** Manifest_Bucket server-side encryption mode (Req 16.5). */
 export type EncryptionMode = "s3-managed" | "kms";
@@ -55,14 +58,42 @@ export interface DataReleaserStackProps extends StackProps {
    * elsewhere can leave it off (Req 16.9).
    */
   readonly provisionOperatorPolicy: boolean;
+
+  /**
+   * VPC id hosting the `execute-api` interface endpoint through which the
+   * authorization callout reaches this API, and into which both Lambda
+   * functions place their ENIs. Always required: there is no public variant of
+   * this stack.
+   *
+   * `GET /authorize` cannot be authenticated — htsget-rs issues the callout as
+   * an unsigned GET — so network reachability is the only control available for
+   * it. The REST API is therefore ALWAYS a PRIVATE endpoint; the former
+   * `privateApi=false` sandbox escape hatch has been removed deliberately, and
+   * the VpcOnlyAspect fails synth on any non-private API or non-VPC function.
+   *
+   * This must be the SAME VPC the htsget-rs Lambda is attached to
+   * (`vpcOrName` on the htsget-pipeline lattice producer) — a private API is
+   * reachable only through an interface endpoint in a VPC the caller has ENIs
+   * in. It is looked up rather than created: it is a pre-existing landing-zone
+   * VPC that this stack must not own or modify.
+   */
+  readonly apiVpcId: string;
 }
 
 /** DynamoDB GSI names — must match the constants the Go handlers query against. */
 const GSI1_NAME = "GSI1"; // targetVpcArn — authorization callout lookup (Req 4.2)
 const GSI2_NAME = "GSI2"; // researcherAccountId + createdAt — list / idempotency
 
-/** Query-string parameter carrying the requester identity (source VPC ARN). */
-const SOURCE_VPC_ARN_PARAM = "sourceVpcArn";
+/**
+ * Header carrying the requester identity (source VPC ARN).
+ *
+ * htsget-rs issues the authorization callout as a bare GET and passes every
+ * forwarded context value as a header prefixed with `Htsget-Context-`, so the
+ * identity never appears in the query string. The name after the prefix is the
+ * `name` of the `auth.authorization.forward.context.extensions` entry that
+ * extracts `$.requestContext.identity.sourceVpcArn`.
+ */
+const SOURCE_VPC_ARN_HEADER = "Htsget-Context-SourceVpcArn";
 
 /** Manifest object key prefix (Req 7.9 / 16.5): manifests/<account-id>/... */
 const MANIFEST_PREFIX = "manifests";
@@ -83,6 +114,48 @@ export class DataReleaserStack extends Stack {
     super(scope, id, props);
 
     const prefix = props.namePrefix;
+
+    // Synth-time invariant, not convention: any Lambda without a VpcConfig, any
+    // non-PRIVATE API Gateway, any HTTP API, any function URL, any public
+    // Lambda permission and any bucket without a full public-access block fails
+    // the build. The stack enforces this on itself so that every consumer —
+    // the CDK app, the assertion tests, anything else that instantiates it —
+    // gets the guarantee, not just deploys that go through bin/.
+    Aspects.of(this).add(new VpcOnlyAspect());
+
+    // ---------------------------------------------------------------------
+    // VPC (pre-existing landing-zone VPC, looked up — never created/modified
+    // beyond adding ENIs, security groups and the interface endpoint).
+    // ---------------------------------------------------------------------
+    // Everything with a network interface in this stack lives here: the
+    // `execute-api` interface endpoint the callout arrives through, and the
+    // ENIs of both Lambda functions.
+    const vpc = ec2.Vpc.fromLookup(this, "ApiVpc", { vpcId: props.apiVpcId });
+
+    // Egress-only security group for the two Lambda functions. They accept no
+    // inbound connections (Lambda invocation is an AWS control-plane operation,
+    // not a network connection to the ENI) and only ever open HTTPS outwards —
+    // to DynamoDB via the VPC's private egress path.
+    const lambdaSecurityGroup = new ec2.SecurityGroup(this, "LambdaSg", {
+      vpc,
+      description: `${prefix} Lambda functions: HTTPS egress only.`,
+      allowAllOutbound: false,
+    });
+    lambdaSecurityGroup.addEgressRule(
+      ec2.Peer.anyIpv4(),
+      ec2.Port.tcp(443),
+      "HTTPS to AWS service endpoints (DynamoDB)",
+    );
+
+    // Both functions sit in the private-with-egress subnets: they need a route
+    // to the regional DynamoDB endpoint (NAT, or a DynamoDB gateway endpoint if
+    // the landing-zone VPC provides one). CloudWatch logging is unaffected by
+    // VPC attachment — log delivery does not traverse the function's ENIs.
+    const lambdaVpcConfig = {
+      vpc,
+      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
+      securityGroups: [lambdaSecurityGroup],
+    };
 
     // ---------------------------------------------------------------------
     // Share_Record DynamoDB table (Req 16.2, 10.2, 8.2)
@@ -142,7 +215,12 @@ export class DataReleaserStack extends Stack {
       roleName: `${prefix}-authorization-role`,
       assumedBy: new iam.ServicePrincipal("lambda.amazonaws.com"),
       managedPolicies: [
-        iam.ManagedPolicy.fromAwsManagedPolicyName("service-role/AWSLambdaBasicExecutionRole"),
+        // Superset of AWSLambdaBasicExecutionRole: the same CloudWatch Logs
+        // permissions plus the ENI create/describe/delete that a VPC-attached
+        // function needs.
+        iam.ManagedPolicy.fromAwsManagedPolicyName(
+          "service-role/AWSLambdaVPCAccessExecutionRole",
+        ),
       ],
     });
     authRole.addToPolicy(
@@ -162,6 +240,7 @@ export class DataReleaserStack extends Stack {
       role: authRole,
       memorySize: 128,
       timeout: Duration.seconds(10),
+      ...lambdaVpcConfig,
       environment: {
         SHARE_RECORDS_TABLE_NAME: table.tableName,
         CACHE_TTL_CEILING: props.cacheTtlCeiling,
@@ -177,7 +256,10 @@ export class DataReleaserStack extends Stack {
       roleName: `${prefix}-admin-role`,
       assumedBy: new iam.ServicePrincipal("lambda.amazonaws.com"),
       managedPolicies: [
-        iam.ManagedPolicy.fromAwsManagedPolicyName("service-role/AWSLambdaBasicExecutionRole"),
+        // See the authorization role: VPC variant of the basic execution role.
+        iam.ManagedPolicy.fromAwsManagedPolicyName(
+          "service-role/AWSLambdaVPCAccessExecutionRole",
+        ),
       ],
     });
     adminRole.addToPolicy(
@@ -210,6 +292,7 @@ export class DataReleaserStack extends Stack {
       role: adminRole,
       memorySize: 128,
       timeout: Duration.seconds(10),
+      ...lambdaVpcConfig,
       environment: {
         SHARE_RECORDS_TABLE_NAME: table.tableName,
       },
@@ -223,38 +306,121 @@ export class DataReleaserStack extends Stack {
     // caching of authorization decisions is handled entirely by the
     // standards-governed (RFC 9111) HTTP cache in the htsget-rs authorization
     // callout client, driven by the Cache-Control the Lambda emits.
+    // The callout itself cannot be authenticated: htsget-rs sends an unsigned
+    // GET and its config has no way to attach a credential (the callout's
+    // `forward.headers` is an allow/deny filter over the *client's* headers, not
+    // a way to inject one). Reachability is therefore the control: the API is a
+    // PRIVATE endpoint, so the only way in is an `execute-api` interface
+    // endpoint in the VPC the htsget-rs Lambda has its ENIs in. It is not
+    // resolvable, let alone callable, from the internet.
+    //
+    // Private DNS on the endpoint keeps the hostname unchanged
+    // (`<api-id>.execute-api.<region>.amazonaws.com`), so the callout URL and
+    // the whole HTSGET_AUTH_AUTHORIZATION string are identical to the public
+    // form — nothing in htsget-rs's config changes.
+    // Only the VPC's own address space may open the endpoint, and only on 443.
+    // The endpoint is in a shared landing-zone VPC, so this security group is
+    // one of the few pieces of it this stack owns.
+    const endpointSecurityGroup = new ec2.SecurityGroup(this, "ApiVpcEndpointSg", {
+      vpc,
+      description: `HTTPS to the ${prefix} authorization API interface endpoint.`,
+      allowAllOutbound: false,
+    });
+    endpointSecurityGroup.addIngressRule(
+      ec2.Peer.ipv4(vpc.vpcCidrBlock),
+      ec2.Port.tcp(443),
+      "htsget-rs authorization callout",
+    );
+
+    const vpcEndpoint = new ec2.InterfaceVpcEndpoint(this, "ApiVpcEndpoint", {
+      vpc,
+      service: ec2.InterfaceVpcEndpointAwsService.APIGATEWAY,
+      // Resolves the standard execute-api hostname to the endpoint inside the
+      // VPC, which is what lets the callout URL stay unchanged.
+      privateDnsEnabled: true,
+      securityGroups: [endpointSecurityGroup],
+      subnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
+    });
+
+    // A private API is deny-by-default: without a resource policy nothing can
+    // call it at all. The allow is conditioned on the endpoint the request came
+    // through, and the explicit deny makes that a hard boundary rather than
+    // something a future identity-policy grant could widen.
+    const apiPolicy = new iam.PolicyDocument({
+      statements: [
+        new iam.PolicyStatement({
+          sid: "AllowFromAuthorizationVpcEndpoint",
+          effect: iam.Effect.ALLOW,
+          principals: [new iam.AnyPrincipal()],
+          actions: ["execute-api:Invoke"],
+          resources: ["execute-api:/*"],
+          conditions: {
+            StringEquals: { "aws:SourceVpce": vpcEndpoint.vpcEndpointId },
+          },
+        }),
+        new iam.PolicyStatement({
+          sid: "DenyFromAnywhereElse",
+          effect: iam.Effect.DENY,
+          principals: [new iam.AnyPrincipal()],
+          actions: ["execute-api:Invoke"],
+          resources: ["execute-api:/*"],
+          conditions: {
+            StringNotEquals: { "aws:SourceVpce": vpcEndpoint.vpcEndpointId },
+          },
+        }),
+      ],
+    });
+
     const api = new apigw.RestApi(this, "AuthorizationApi", {
       restApiName: `${prefix}-authorization-api`,
       description: "Authorization Service REST API (callout + admin).",
       deployOptions: {
         stageName: props.stageName,
       },
+      endpointConfiguration: {
+        types: [apigw.EndpointType.PRIVATE],
+        vpcEndpoints: [vpcEndpoint],
+      },
+      policy: apiPolicy,
     });
 
-    // Authorization callout: GET /authorize?sourceVpcArn=...  (called by htsget-rs).
-    // The forwarded requester identity (the sourceVpcArn query-string parameter)
-    // is required, so a response is always specific to one researcher.
+    // Authorization callout: GET /authorize (called by htsget-rs).
+    //
+    // The requester identity arrives in the ${SOURCE_VPC_ARN_HEADER} header, not
+    // the query string. It is deliberately NOT declared as a required request
+    // parameter: API Gateway rejects a request missing a required parameter with a
+    // 400 before the Lambda runs, so requiring anything htsget-rs does not send
+    // makes every callout fail. The handler enforces the identity instead —
+    // a request without it matches no share and is denied.
     const authorize = api.root.addResource("authorize");
-    authorize.addMethod(
-      "GET",
-      new apigw.LambdaIntegration(authFn, { proxy: true }),
-      {
-        requestParameters: {
-          [`method.request.querystring.${SOURCE_VPC_ARN_PARAM}`]: true,
-        },
-      },
-    );
+    authorize.addMethod("GET", new apigw.LambdaIntegration(authFn, { proxy: true }));
 
     // Admin interface (called by the CLI). Paths match the Go admin router
     // (internal/auth/admin.go HandleRequest): the stage strips no path segment
     // beyond the stage name, so the handler sees /admin/shares etc.
+    //
+    // Every admin method requires SigV4 (AuthorizationType.IAM). These routes
+    // create, revoke and extend shares, so an unauthenticated one would let
+    // anyone who learns the URL grant themselves access to the data bucket.
+    // Callers need execute-api:Invoke on the method ARN — the operator managed
+    // policy below grants exactly that when `provisionOperatorPolicy` is set.
+    //
+    // GET /authorize above cannot be given the same treatment — htsget-rs issues
+    // the callout as a plain unsigned GET, so IAM auth there would reject every
+    // request. Its control is the private endpoint above: unauthenticated, but
+    // only reachable from inside the VPC. The two layers compose, so an admin
+    // call must both arrive through the interface endpoint and be signed by a
+    // principal holding execute-api:Invoke.
     const adminIntegration = new apigw.LambdaIntegration(adminFn, { proxy: true });
+    const adminAuth: apigw.MethodOptions = {
+      authorizationType: apigw.AuthorizationType.IAM,
+    };
     const admin = api.root.addResource("admin");
     const shares = admin.addResource("shares");
-    shares.addMethod("POST", adminIntegration); // create
-    shares.addMethod("GET", adminIntegration); // list
-    shares.addResource("revoke").addMethod("POST", adminIntegration);
-    shares.addResource("extend").addMethod("POST", adminIntegration);
+    shares.addMethod("POST", adminIntegration, adminAuth); // create
+    shares.addMethod("GET", adminIntegration, adminAuth); // list
+    shares.addResource("revoke").addMethod("POST", adminIntegration, adminAuth);
+    shares.addResource("extend").addMethod("POST", adminIntegration, adminAuth);
 
     // ---------------------------------------------------------------------
     // Manifest_Bucket + cross-account read policy (Req 16.5, 7.9, 11.5)
@@ -282,7 +448,6 @@ export class DataReleaserStack extends Stack {
     const manifestBucket = new s3.Bucket(this, "ManifestBucket", {
       bucketName: `${prefix}-manifests-${this.account}`,
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
-      publicReadAccess: false,
       enforceSSL: true,
       versioned: true,
       encryption: bucketEncryption,
@@ -369,6 +534,16 @@ export class DataReleaserStack extends Stack {
               `arn:aws:apigateway:${this.region}::/restapis/${api.restApiId}/stages/${props.stageName}`,
             ],
           }),
+          // Call the admin API. Those methods are AuthorizationType.IAM, so a
+          // caller without this statement gets 403 Missing Authentication Token
+          // no matter how well it signs the request. Scoped to /admin/* on this
+          // stage only: it deliberately does not cover GET /authorize, which is
+          // open and needs no permission.
+          new iam.PolicyStatement({
+            sid: "InvokeAdminApi",
+            actions: ["execute-api:Invoke"],
+            resources: [api.arnForExecuteApi("*", "/admin/*", props.stageName)],
+          }),
           // manage VPC Lattice / RAM associations (connectivity preflight).
           new iam.PolicyStatement({
             sid: "LatticeAndRam",
@@ -427,9 +602,20 @@ export class DataReleaserStack extends Stack {
       exportName: `${prefix}-manifestBucket`,
     });
     // The callout URL the CLI/htsget config points at (endpoints.authorization).
+    // Unchanged by the private endpoint: private DNS resolves this same hostname
+    // to the interface endpoint inside the VPC. It only resolves there, though —
+    // it is not callable from an operator workstation.
     new CfnOutput(this, "AuthorizationCalloutUrl", {
       value: `${api.url}authorize`,
-      description: "CLI/htsget config: endpoints.authorization (append ?sourceVpcArn=...)",
+      description:
+        "CLI/htsget config: endpoints.authorization (identity travels in the " +
+        `${SOURCE_VPC_ARN_HEADER} header)`,
+    });
+    new CfnOutput(this, "AuthorizationApiVpcEndpointId", {
+      value: vpcEndpoint.vpcEndpointId,
+      description:
+        "The only route to the authorization API. Callers must have ENIs in " +
+        "this VPC; everything else is denied by the API resource policy.",
     });
   }
 }

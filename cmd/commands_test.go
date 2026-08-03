@@ -7,8 +7,10 @@ import (
 	"time"
 
 	"github.com/umccr/data-releaser/internal/auth"
+	"github.com/umccr/data-releaser/internal/config"
 	"github.com/umccr/data-releaser/internal/manifest"
 	"github.com/umccr/data-releaser/internal/model"
+	"github.com/umccr/data-releaser/internal/testgen"
 )
 
 // These tests exercise the command orchestration seams — the auth.ShareStore operations
@@ -16,7 +18,7 @@ import (
 // same code paths the commands use, backed by an in-memory DynamoDB mock. They avoid any
 // live AWS dependency.
 
-const testTable = ShareRecordsTableName
+const testTable = config.DefaultShareRecordsTable
 
 func newStore() (*auth.ShareStore, *mockDDB) {
 	m := newMockDDB()
@@ -47,7 +49,7 @@ func TestShareCreationFlow(t *testing.T) {
 
 	rec, reused, err := store.CreateIdempotent(context.Background(), auth.CreateInput{
 		ResearcherAccountID: account,
-		TargetVpcArn:        deriveTargetVpcArn(account),
+		TargetVpcArn:        testgen.VPCArnForAccount(account),
 		LibraryIDs:          []string{"L2400001", "L2400002"},
 		S3Prefixes:          []string{"s3://b/p1/", "s3://b/p2/"},
 		ExpiresAt:           &expiry,
@@ -76,7 +78,7 @@ func TestShareCreationFlow(t *testing.T) {
 	// Idempotent repeat with the same library set (different order) reuses the record.
 	rec2, reused2, err := store.CreateIdempotent(context.Background(), auth.CreateInput{
 		ResearcherAccountID: account,
-		TargetVpcArn:        deriveTargetVpcArn(account),
+		TargetVpcArn:        testgen.VPCArnForAccount(account),
 		LibraryIDs:          []string{"L2400002", "L2400001"},
 		S3Prefixes:          []string{"s3://b/p2/", "s3://b/p1/"},
 		ExpiresAt:           &expiry,
@@ -103,7 +105,7 @@ func TestRevokeTransition(t *testing.T) {
 
 	created, err := store.Create(context.Background(), auth.CreateInput{
 		ResearcherAccountID: account,
-		TargetVpcArn:        deriveTargetVpcArn(account),
+		TargetVpcArn:        testgen.VPCArnForAccount(account),
 		LibraryIDs:          []string{"L2400001"},
 		S3Prefixes:          []string{"s3://b/p1/"},
 	})

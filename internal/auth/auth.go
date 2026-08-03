@@ -60,7 +60,10 @@ type CreateInput struct {
 	TargetVpcArn        string
 	LibraryIDs          []string
 	S3Prefixes          []string
-	ExpiresAt           *time.Time
+	// Files records the individual resolved files for manifest generation. Optional;
+	// it never affects authorization, which is granted by S3Prefixes.
+	Files     []model.ShareFile
+	ExpiresAt *time.Time
 }
 
 // Create persists a new ShareRecord with a generated ULID, computed expiry, s3Prefixes,
@@ -75,6 +78,7 @@ func (s *ShareStore) Create(ctx context.Context, input CreateInput) (*model.Shar
 		TargetVpcArn:        input.TargetVpcArn,
 		LibraryIDs:          input.LibraryIDs,
 		S3Prefixes:          input.S3Prefixes,
+		Files:               input.Files,
 		CreatedAt:           now,
 		ExpiresAt:           input.ExpiresAt,
 		RevokedAt:           nil,
@@ -308,9 +312,19 @@ type dynamoShareRecord struct {
 	TargetVpcArn        string   `dynamodbav:"targetVpcArn"`
 	LibraryIDs          []string `dynamodbav:"libraryIds,stringset"`
 	S3Prefixes          []string `dynamodbav:"s3Prefixes,stringset"`
-	CreatedAt           string   `dynamodbav:"createdAt"`
-	ExpiresAt           *string  `dynamodbav:"expiresAt,omitempty"`
-	RevokedAt           *string  `dynamodbav:"revokedAt,omitempty"`
+	// Files is a list rather than a set: entries are structs, and their order is the
+	// resolution order, which the manifest reproduces.
+	Files     []dynamoShareFile `dynamodbav:"files,omitempty"`
+	CreatedAt string            `dynamodbav:"createdAt"`
+	ExpiresAt *string           `dynamodbav:"expiresAt,omitempty"`
+	RevokedAt *string           `dynamodbav:"revokedAt,omitempty"`
+}
+
+// dynamoShareFile is the DynamoDB representation of a model.ShareFile.
+type dynamoShareFile struct {
+	LibraryID string `dynamodbav:"libraryId"`
+	HtsgetID  string `dynamodbav:"htsgetId"`
+	Format    string `dynamodbav:"format"`
 }
 
 // marshalShareRecord converts a model.ShareRecord to a DynamoDB attribute map.
@@ -321,6 +335,7 @@ func marshalShareRecord(record *model.ShareRecord) (map[string]types.AttributeVa
 		TargetVpcArn:        record.TargetVpcArn,
 		LibraryIDs:          record.LibraryIDs,
 		S3Prefixes:          record.S3Prefixes,
+		Files:               toDynamoShareFiles(record.Files),
 		CreatedAt:           record.CreatedAt.Format(time.RFC3339),
 	}
 
@@ -354,6 +369,7 @@ func unmarshalShareRecord(item map[string]types.AttributeValue) (*model.ShareRec
 		TargetVpcArn:        ddbRecord.TargetVpcArn,
 		LibraryIDs:          ddbRecord.LibraryIDs,
 		S3Prefixes:          ddbRecord.S3Prefixes,
+		Files:               fromDynamoShareFiles(ddbRecord.Files),
 		CreatedAt:           createdAt,
 	}
 
@@ -374,6 +390,40 @@ func unmarshalShareRecord(item map[string]types.AttributeValue) (*model.ShareRec
 	}
 
 	return record, nil
+}
+
+// toDynamoShareFiles converts model share files to their DynamoDB representation.
+// Nil in, nil out, so a record with no files omits the attribute entirely.
+func toDynamoShareFiles(files []model.ShareFile) []dynamoShareFile {
+	if len(files) == 0 {
+		return nil
+	}
+	out := make([]dynamoShareFile, 0, len(files))
+	for _, f := range files {
+		out = append(out, dynamoShareFile{
+			LibraryID: f.LibraryID,
+			HtsgetID:  f.HtsgetID,
+			Format:    f.Format,
+		})
+	}
+	return out
+}
+
+// fromDynamoShareFiles converts stored share files back to the model type. Records
+// written before the attribute existed simply produce nil.
+func fromDynamoShareFiles(files []dynamoShareFile) []model.ShareFile {
+	if len(files) == 0 {
+		return nil
+	}
+	out := make([]model.ShareFile, 0, len(files))
+	for _, f := range files {
+		out = append(out, model.ShareFile{
+			LibraryID: f.LibraryID,
+			HtsgetID:  f.HtsgetID,
+			Format:    f.Format,
+		})
+	}
+	return out
 }
 
 // unmarshalShareRecords converts a slice of DynamoDB items to ShareRecords.

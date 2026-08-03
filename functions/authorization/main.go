@@ -14,10 +14,15 @@
 //	CACHE_DENY_TTL            (optional) negative-cache max-age as a Go duration,
 //	                          e.g. "60s". Default 60s (Req 13.2).
 //
-// The source VPC ARN of the requester arrives as the "sourceVpcArn" query string
-// parameter of the API Gateway proxy event (the same shape the CLI's validate
-// probe uses). The handler emits a Cache-Control header computed from the matched
-// shares' remaining lifetimes; that value is copied onto the proxy response.
+// The source VPC ARN of the requester arrives as the "Htsget-Context-SourceVpcArn"
+// request header. htsget-rs issues the authorization callout as a bare GET with
+// headers only — it never appends a query string — so the header is the real
+// transport. The "sourceVpcArn" query string parameter is still accepted as a
+// fallback so that out-of-band probes (the CLI's validate command) and manual
+// curl testing keep working.
+//
+// The handler emits a Cache-Control header computed from the matched shares'
+// remaining lifetimes; that value is copied onto the proxy response.
 package main
 
 import (
@@ -27,6 +32,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -47,7 +53,8 @@ const (
 	defaultDenyTTL    = 60 * time.Second
 
 	// sourceVpcArnParam is the query string parameter carrying the requester's
-	// source VPC ARN, matching the convention used elsewhere in this project.
+	// source VPC ARN. This is a fallback for out-of-band probes only; the real
+	// callout from htsget-rs uses auth.SourceVpcArnHeader.
 	sourceVpcArnParam = "sourceVpcArn"
 )
 
@@ -61,7 +68,7 @@ type handler struct {
 // handle adapts an API Gateway proxy event to the CalloutHandler and maps the
 // result back onto a proxy response.
 func (h *handler) handle(ctx context.Context, req events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	sourceVpcArn := req.QueryStringParameters[sourceVpcArnParam]
+	sourceVpcArn := sourceVpcArnFrom(req)
 
 	result, calloutErr := h.callout.HandleCalloutWithHeaders(ctx, sourceVpcArn, h.ceiling, h.denyTTL)
 
@@ -94,6 +101,36 @@ func (h *handler) handle(ctx context.Context, req events.APIGatewayProxyRequest)
 	}
 
 	return resp, nil
+}
+
+// sourceVpcArnFrom extracts the requester's source VPC ARN from the proxy event.
+//
+// The header is authoritative because that is how htsget-rs sends it. HTTP header
+// names are case-insensitive and API Gateway passes through whatever casing the
+// client used, so the lookup folds case rather than assuming a canonical form.
+// An empty result is not an error: it flows through to the callout handler, which
+// finds no matching share and fails closed with a deny.
+func sourceVpcArnFrom(req events.APIGatewayProxyRequest) string {
+	if v := headerValue(req.Headers, req.MultiValueHeaders, auth.SourceVpcArnHeader); v != "" {
+		return v
+	}
+	return req.QueryStringParameters[sourceVpcArnParam]
+}
+
+// headerValue looks up a header by name, ignoring case, preferring the
+// single-valued map and falling back to the multi-value map.
+func headerValue(headers map[string]string, multi map[string][]string, name string) string {
+	for k, v := range headers {
+		if strings.EqualFold(k, name) {
+			return v
+		}
+	}
+	for k, values := range multi {
+		if strings.EqualFold(k, name) && len(values) > 0 {
+			return values[0]
+		}
+	}
+	return ""
 }
 
 func main() {

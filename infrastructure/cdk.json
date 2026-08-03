@@ -28,7 +28,17 @@
       "cacheTtlCeiling": "1h",
       "cacheDenyTtl": "60s",
       "encryption": "s3-managed",
-      "provisionOperatorPolicy": false
+      "provisionOperatorPolicy": false,
+
+      "apiVpcId": "vpc-03e01fb6290012661",
+
+      "dataShareTest": false,
+
+      "mockMart": false,
+      "mockMartDatabase": "mart_mock",
+      "mockMartWorkgroup": "data-releaser-mock",
+      "mockMartCohortId": "DEMO",
+      "mockMartObjects": ["L2400001=demo/L2400001/NA12878.bam"]
     }
   }
 }

@@ -63,8 +63,11 @@ npx cdk synth     # synthesise the CloudFormation template (no credentials neede
 npx cdk deploy    # deploy to the target account/region
 ```
 
-`cdk synth` runs with placeholder account/region and no credentials, which makes
-it a safe pre-deploy check. `cdk deploy` uses your resolved AWS credentials.
+`cdk synth` needs no credentials as long as `account`/`region` match the VPC
+lookup cached in `infrastructure/cdk.context.json` (checked in):
+`npx cdk synth -c account=916218008751 -c region=ap-southeast-2`. A lookup for
+a new account, region or `apiVpcId` needs credentials once to populate that
+cache. `cdk deploy` always uses your resolved AWS credentials.
 
 ## Targeting an account and region
 
@@ -101,6 +104,7 @@ npx cdk deploy \
 | `cacheDenyTtl` | Negative-cache max-age, Go duration string | `60s` |
 | `encryption` | Manifest_Bucket SSE mode: `s3-managed` or `kms` | `s3-managed` |
 | `provisionOperatorPolicy` | Provision the optional operator IAM policy (Req 11.2) | `false` |
+| `apiVpcId` | VPC hosting the API's interface endpoint and all Lambdas; must be the VPC the htsget-rs Lambda runs in. **Required** — there is no public deployment mode | `vpc-03e01fb6290012661` |
 
 Onboarding a researcher's manifest read access is a configuration change: add
 their account ID to `researcherAccountIds` and redeploy. Each account gets a
@@ -116,8 +120,9 @@ only (plus a matching `kms:Decrypt` grant when `encryption=kms`).
 
 ## Stack outputs
 
-The stack exports four CloudFormation outputs. Three of them map directly onto
-the CLI configuration fields that reference deployed resources (see
+The stack exports five CloudFormation outputs. Three of them map directly onto
+the CLI configuration fields that
+reference deployed resources (see
 [`docs/configuration.md`](configuration.md#mapping-to-infrastructure_stack-outputs)),
 so those values are read from the deployment rather than guessed:
 
@@ -126,7 +131,15 @@ so those values are read from the deployment rather than guessed:
 | `ApiGatewayRestApiId` | `endpoints.apiGatewayRestApiId` | REST API ID; consumed by the `validate` API Gateway stage check. |
 | `ApiGatewayStageName` | `endpoints.apiGatewayStageName` | Stage name (equals `stageName`; default `prod`). |
 | `ManifestBucketName` | `manifest.bucket` | Manifest_Bucket name (`<namePrefix>-manifests-<account>`). |
-| `AuthorizationCalloutUrl` | `endpoints.authorization` | The callout URL (`<api-url>authorize`); append `?sourceVpcArn=...`. This is also the URL htsget-rs's `[auth.authorization]` callout config points at. |
+| `AuthorizationCalloutUrl` | `endpoints.authorization` | The callout URL (`<api-url>authorize`); append `?sourceVpcArn=...`. This is also the URL htsget-rs's `[auth.authorization]` callout config points at. Private DNS keeps the standard `execute-api` hostname — it simply does not resolve outside the VPC. |
+| `AuthorizationApiVpcEndpointId` | — | The `execute-api` interface endpoint that is the sole route to the API; the resource policy denies everything with a different `aws:SourceVpce`. |
+
+Because the API is private, `endpoints.authorization` is not reachable
+from an operator's machine. Set `validation.skipAuthorizationCheck` so `validate`
+reports that probe as `SKIP` instead of failing on a healthy deployment; see
+[`infrastructure/README.md`](../infrastructure/README.md#api-authorization) for
+the reasoning and [`RUNBOOK.md`](../DEMO.md) for how to verify the endpoint
+from inside the VPC.
 
 Read the outputs after deploying, for example:
 

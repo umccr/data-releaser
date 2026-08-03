@@ -30,6 +30,26 @@ func init() {
 	rootCmd.AddCommand(validateCmd)
 }
 
+// printCheck renders one check result and reports whether it was a failure.
+// A skipped check renders as SKIP and is never a failure.
+func printCheck(c validate.Check) bool {
+	status := "PASS"
+	failed := false
+	switch {
+	case c.Skipped:
+		status = "SKIP"
+	case !c.Passed:
+		status = "FAIL"
+		failed = true
+	}
+
+	fmt.Printf("  [%s] %s\n", status, c.Name)
+	if c.Error != "" {
+		fmt.Printf("         %s\n", c.Error)
+	}
+	return failed
+}
+
 func runValidate(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 
@@ -55,7 +75,7 @@ func runValidate(cmd *cobra.Command, args []string) error {
 		APIGatewayClient:      factory.APIGatewayClient(),
 		HTTPClient:            httpClient,
 		Config:                cfg,
-		ShareRecordsTableName: ShareRecordsTableName,
+		ShareRecordsTableName: shareRecordsTable(),
 	}
 
 	checks := validate.ValidateProvider(ctx, opts)
@@ -66,14 +86,8 @@ func runValidate(cmd *cobra.Command, args []string) error {
 
 	hasFailure := false
 	for _, c := range checks {
-		status := "PASS"
-		if !c.Passed {
-			status = "FAIL"
+		if printCheck(c) {
 			hasFailure = true
-		}
-		fmt.Printf("  [%s] %s\n", status, c.Name)
-		if c.Error != "" {
-			fmt.Printf("         %s\n", c.Error)
 		}
 	}
 
@@ -100,14 +114,8 @@ func runValidate(cmd *cobra.Command, args []string) error {
 		checks = append(checks, researcherChecks...)
 
 		for _, c := range researcherChecks {
-			status := "PASS"
-			if !c.Passed {
-				status = "FAIL"
+			if printCheck(c) {
 				hasFailure = true
-			}
-			fmt.Printf("  [%s] %s\n", status, c.Name)
-			if c.Error != "" {
-				fmt.Printf("         %s\n", c.Error)
 			}
 		}
 	}
@@ -119,7 +127,7 @@ func runValidate(cmd *cobra.Command, args []string) error {
 		fmt.Println("Canary test-setup mode:")
 		fmt.Println("───────────────────────")
 
-		store := auth.NewShareStore(factory.DynamoDBClient(), ShareRecordsTableName)
+		store := auth.NewShareStore(factory.DynamoDBClient(), shareRecordsTable())
 		canaryOpts := validate.CanaryOpts{
 			ShareStore:   store,
 			LambdaClient: factory.LambdaClient(),
@@ -128,25 +136,28 @@ func runValidate(cmd *cobra.Command, args []string) error {
 		canaryCheck := validate.RunCanaryTest(ctx, canaryOpts)
 		checks = append(checks, canaryCheck)
 
-		status := "PASS"
-		if !canaryCheck.Passed {
-			status = "FAIL"
+		if printCheck(canaryCheck) {
 			hasFailure = true
-		}
-		fmt.Printf("  [%s] %s\n", status, canaryCheck.Name)
-		if canaryCheck.Error != "" {
-			fmt.Printf("         %s\n", canaryCheck.Error)
 		}
 	}
 
 	fmt.Println()
-	passed := 0
+	passed, skipped := 0, 0
 	for _, c := range checks {
-		if c.Passed {
+		switch {
+		case c.Skipped:
+			skipped++
+		case c.Passed:
 			passed++
 		}
 	}
-	fmt.Printf("Summary: %d/%d checks passed\n", passed, len(checks))
+	// Skipped checks are excluded from the denominator: reporting them as part of the
+	// total would make a fully healthy deployment look partially broken.
+	fmt.Printf("Summary: %d/%d checks passed", passed, len(checks)-skipped)
+	if skipped > 0 {
+		fmt.Printf(" (%d skipped)", skipped)
+	}
+	fmt.Println()
 
 	if hasFailure {
 		return fmt.Errorf("one or more validation checks failed")

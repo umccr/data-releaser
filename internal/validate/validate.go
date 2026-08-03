@@ -18,6 +18,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 
+	"github.com/umccr/data-releaser/internal/auth"
 	internalaws "github.com/umccr/data-releaser/internal/aws"
 	"github.com/umccr/data-releaser/internal/config"
 )
@@ -27,6 +28,15 @@ type Check struct {
 	Name   string
 	Passed bool
 	Error  string
+	// Skipped marks a check that could not meaningfully run in this context, as
+	// distinct from one that ran and failed. A skipped check is not a failure and
+	// must not gate the exit status. Error carries the reason.
+	Skipped bool
+}
+
+// skip returns a skipped, non-failing check with the given reason.
+func skip(name, reason string) Check {
+	return Check{Name: name, Passed: true, Skipped: true, Error: reason}
 }
 
 // HTTPClient is an interface for making HTTP requests (allows testing).
@@ -59,10 +69,10 @@ func ValidateProvider(ctx context.Context, opts ValidateProviderOpts) []Check {
 	checks = append(checks, checkOrcaVaultMart(ctx, opts.AthenaClient, opts.Config.Warehouse))
 
 	// Check 3: Authorization Service reachability and schema conformance
-	checks = append(checks, checkAuthorizationService(ctx, opts.HTTPClient, opts.Config.Endpoints.Authorization))
+	checks = append(checks, checkAuthorizationService(ctx, opts.HTTPClient, opts.Config.Endpoints.Authorization, opts.Config.Validation))
 
 	// Check 4: Htsget_Rs health/service-info endpoint
-	checks = append(checks, checkHtsgetRs(ctx, opts.HTTPClient, opts.Config.Endpoints.HtsgetBaseURL))
+	checks = append(checks, checkHtsgetRs(ctx, opts.HTTPClient, opts.Config.Endpoints.HtsgetBaseURL, opts.Config.Validation))
 
 	// Check 5: Cross-account S3 HeadObject on canary object
 	checks = append(checks, checkCrossAccountS3(ctx, opts.S3Client, opts.Config.Validation))
@@ -181,8 +191,21 @@ func checkOrcaVaultMart(ctx context.Context, athenaClient internalaws.AthenaClie
 
 // checkAuthorizationService verifies the Authorization Service is reachable
 // and returns a JSON response conforming to the expected schema.
-func checkAuthorizationService(ctx context.Context, httpClient HTTPClient, authEndpoint string) Check {
+//
+// The authorization API is private by default: an interface endpoint inside the
+// data account VPC is the only route to it, and the API's resource policy denies
+// anything that arrives another way. From an operator's machine the hostname does
+// not even resolve, so this check would fail on a healthy deployment — set
+// validation.skipAuthorizationCheck for that topology and probe the callout from
+// inside the VPC instead.
+func checkAuthorizationService(ctx context.Context, httpClient HTTPClient, authEndpoint string, valCfg config.ValidationConfig) Check {
 	check := Check{Name: "Authorization Service Reachability"}
+
+	if valCfg.SkipAuthorizationCheck {
+		return skip(check.Name,
+			"skipped: validation.skipAuthorizationCheck is set because the authorization "+
+				"API is private and only reachable through its VPC interface endpoint")
+	}
 
 	if authEndpoint == "" {
 		check.Passed = false
@@ -190,16 +213,21 @@ func checkAuthorizationService(ctx context.Context, httpClient HTTPClient, authE
 		return check
 	}
 
-	// Issue a GET request to the authorization endpoint.
-	// We use a non-existent VPC ARN to get a deny response which is still schema-conformant.
-	url := authEndpoint + "?sourceVpcArn=arn:aws:vpc-lattice:ap-southeast-2:000000000000:servicenetworkserviceassociation/probe"
+	// Issue a GET request to the authorization endpoint using a VPC ARN that belongs
+	// to no share, so the response is a deny — which is still schema-conformant and
+	// creates nothing.
+	const probeVpcArn = "arn:aws:ec2:ap-southeast-2:000000000000:vpc/vpc-00000000000000000"
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, authEndpoint, nil)
 	if err != nil {
 		check.Passed = false
 		check.Error = fmt.Sprintf("failed to construct request: %v", err)
 		return check
 	}
+
+	// Send the identity the same way htsget-rs does, as a forwarded context header,
+	// so this check exercises the real code path rather than a probe-only one.
+	req.Header.Set(auth.SourceVpcArnHeader, probeVpcArn)
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
@@ -243,8 +271,20 @@ func checkAuthorizationService(ctx context.Context, httpClient HTTPClient, authE
 
 // checkHtsgetRs verifies the Htsget_Rs endpoint is healthy by hitting the
 // /service-info endpoint.
-func checkHtsgetRs(ctx context.Context, httpClient HTTPClient, htsgetBaseURL string) Check {
+//
+// When htsget-rs is fronted by VPC Lattice its domain only resolves from inside an
+// associated VPC, so this check cannot run from an operator's machine — it would fail
+// on a healthy deployment. Set validation.skipHtsgetCheck for that topology and verify
+// htsget-rs from inside the consumer VPC instead (the aws-vpc-lattice consumer
+// construct's optional test Lambda does exactly this).
+func checkHtsgetRs(ctx context.Context, httpClient HTTPClient, htsgetBaseURL string, valCfg config.ValidationConfig) Check {
 	check := Check{Name: "Htsget_Rs Health (service-info)"}
+
+	if valCfg.SkipHtsgetCheck {
+		return skip(check.Name,
+			"skipped: validation.skipHtsgetCheck is set because htsget-rs is only "+
+				"reachable from inside a VPC associated with its VPC Lattice service network")
+	}
 
 	if htsgetBaseURL == "" {
 		check.Passed = false

@@ -66,7 +66,7 @@ func runExtend(cmd *cobra.Command, args []string) error {
 	}
 
 	// --- Step 3: Get the share first to check if it's unlimited (Req 9.5) ---
-	store := auth.NewShareStore(factory.DynamoDBClient(), ShareRecordsTableName)
+	store := auth.NewShareStore(factory.DynamoDBClient(), shareRecordsTable())
 
 	existing, err := store.Get(ctx, shareID)
 	if err != nil {

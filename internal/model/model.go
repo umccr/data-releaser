@@ -30,7 +30,15 @@ type ShareRecord struct {
 	LibraryIDs []string `json:"libraryIds"`
 
 	// S3Prefixes is the set of resolved S3 prefix locations for htsget access.
+	// These are what the authorization callout grants on; they are directories, so
+	// they cover co-located index files.
 	S3Prefixes []string `json:"s3Prefixes"`
+
+	// Files is the set of individual files resolved at share time, recorded so the
+	// manifest can name each file's exact htsget request path. It is descriptive
+	// only — authorization is granted by S3Prefixes, never by this field. Records
+	// written before this field existed have none.
+	Files []ShareFile `json:"files,omitempty"`
 
 	// CreatedAt is the UTC timestamp when the share was created.
 	CreatedAt time.Time `json:"createdAt"`
@@ -40,6 +48,21 @@ type ShareRecord struct {
 
 	// RevokedAt is the optional timestamp when the share was revoked. Nil means not revoked.
 	RevokedAt *time.Time `json:"revokedAt"`
+}
+
+// ShareFile is a single file covered by a share, as resolved from the warehouse at
+// share time.
+type ShareFile struct {
+	// LibraryID is the library this file belongs to.
+	LibraryID string `json:"libraryId"`
+
+	// HtsgetID is the htsget resource id for the file: the S3 key without its bucket
+	// and without the format extension, e.g. "demo/L2400001/NA12878". Prefixing it
+	// with an endpoint gives the request path, e.g. "reads/demo/L2400001/NA12878".
+	HtsgetID string `json:"htsgetId"`
+
+	// Format is the lower-cased file format, e.g. "bam".
+	Format string `json:"format"`
 }
 
 // EffectiveStatus computes the current status of the share record based on the

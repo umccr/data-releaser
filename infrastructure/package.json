@@ -11,6 +11,7 @@
     "watch": "tsc -w",
     "test": "jest",
     "build:lambdas": "bash scripts/build-lambdas.sh",
+    "fetch:test-data": "bash scripts/fetch-test-data.sh",
     "synth": "cdk synth",
     "cdk": "cdk"
   },

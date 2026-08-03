@@ -97,6 +97,19 @@ checks report themselves as skipped/unavailable.
 | `validation.canary.bucket` | optional | — | Data Account bucket holding the canary object (for the cross-account HeadObject check). |
 | `validation.canary.key` | optional | — | Object key of the canary object. |
 
+### `validation` — skipping unreachable checks
+
+Two `validate` checks make HTTP calls to endpoints that, in the VPC-isolated
+topology this system deploys, deliberately do not resolve from an operator's
+machine. Neither flag weakens anything — they turn a guaranteed false failure
+into an explicit `SKIP`, and both endpoints are verified from inside the VPC
+instead.
+
+| Field | Required | Default | Description |
+| --- | --- | --- | --- |
+| `validation.skipHtsgetCheck` | optional | `false` | Skip the htsget-rs `/service-info` health check. Set it when htsget-rs is fronted by VPC Lattice: its domain resolves only from a VPC associated with the service network. |
+| `validation.skipAuthorizationCheck` | optional | `false` | Skip the Authorization Service reachability probe. Set it when the authorization API is deployed private (the default) — it is served by an `execute-api` interface endpoint in the data account VPC, and its resource policy denies anything arriving another way. |
+
 ## Annotated example
 
 ```yaml
@@ -127,6 +140,8 @@ cache:
   denyTtl:    "60s"   # optional — negative cache for deny responses (default 60s)
 
 validation:
+  skipHtsgetCheck: true         # htsget-rs only resolves inside a VPC on the lattice network
+  skipAuthorizationCheck: true  # the authorization API is private to the data account VPC
   canary:                       # optional — used only by `validate`
     libraryId: "L2400999"
     account:   "534840902377"

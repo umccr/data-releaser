@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -442,5 +443,83 @@ func TestHandleCallout_BackwardCompatible(t *testing.T) {
 	}
 	if len(response.HtsgetAuth) != 0 {
 		t.Errorf("expected empty htsgetAuth (deny), got %d entries", len(response.HtsgetAuth))
+	}
+}
+
+// --- Wire format ---
+
+// TestCalloutResponse_WireFormat pins the exact JSON the callout emits.
+//
+// This is a contract with a consumer in another language: htsget-rs deserialises the
+// body into `AuthorizationRestrictions`, whose `AuthorizationRule` is declared with
+// `deny_unknown_fields` and accepts only `location` and an optional `rules`. The
+// `location` value must in turn match one of htsget-rs's `LocationWrapper` variants.
+//
+// Nothing in the Go type system catches a drift here, and the failure mode is severe
+// and silent from this side: htsget-rs cannot parse the response, so it fails closed
+// and *every* request is denied with no signal that the share itself is fine. Hence a
+// test on the literal bytes.
+func TestCalloutResponse_WireFormat(t *testing.T) {
+	response := &CalloutResponse{
+		Version: 1,
+		HtsgetAuth: []LocationEntry{
+			{Location: LocationID{Prefix: "demo/L2400001/"}},
+		},
+	}
+
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		t.Fatalf("marshaling response: %v", err)
+	}
+
+	const want = `{"version":1,"htsgetAuth":[{"location":{"prefix":"demo/L2400001/"}}]}`
+	if string(encoded) != want {
+		t.Errorf("callout wire format drifted.\n got: %s\nwant: %s", encoded, want)
+	}
+
+	// The backend must stay absent. Emitting one would make htsget-rs treat the
+	// location as a remote location to search directly, which requires it to hold
+	// broad S3 read permissions and to be told the storage topology by this service.
+	// Absent, htsget-rs filters the defaulted backend out and resolves the object
+	// against its own configured location instead.
+	var decoded map[string]any
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("unmarshaling response: %v", err)
+	}
+	location := decoded["htsgetAuth"].([]any)[0].(map[string]any)["location"].(map[string]any)
+	if _, present := location["backend"]; present {
+		t.Error("location must not carry a backend")
+	}
+	if _, present := location["id"]; present {
+		t.Error("location must use `prefix`, not `id`: `id` is matched by equality against " +
+			"the full htsget id, but a share grants a directory")
+	}
+}
+
+// TestCalloutResponse_DenyWireFormat pins the deny body. An empty (not null)
+// htsgetAuth array is what htsget-rs needs to see zero matching rules.
+func TestCalloutResponse_DenyWireFormat(t *testing.T) {
+	encoded, err := json.Marshal(&CalloutResponse{Version: 1, HtsgetAuth: []LocationEntry{}})
+	if err != nil {
+		t.Fatalf("marshaling response: %v", err)
+	}
+
+	const want = `{"version":1,"htsgetAuth":[]}`
+	if string(encoded) != want {
+		t.Errorf("deny wire format drifted.\n got: %s\nwant: %s", encoded, want)
+	}
+}
+
+// TestVaryIdentityHeaders_NamesTheForwardedHeader guards against the Vary header
+// naming a header that is never actually sent.
+func TestVaryIdentityHeaders_NamesTheForwardedHeader(t *testing.T) {
+	if VaryIdentityHeaders != SourceVpcArnHeader {
+		t.Errorf("Vary names %q but the identity arrives on %q; a cache keyed on the "+
+			"Vary value would serve one requester's decision to another",
+			VaryIdentityHeaders, SourceVpcArnHeader)
+	}
+	if !strings.HasPrefix(SourceVpcArnHeader, "Htsget-Context-") {
+		t.Errorf("htsget-rs forwards context values with the Htsget-Context- prefix, got %q",
+			SourceVpcArnHeader)
 	}
 }

@@ -152,6 +152,62 @@ func TestValidateProvider_ContinuesOnFailure(t *testing.T) {
 	}
 }
 
+// The authorization API is a private endpoint, so from an operator's machine the
+// probe fails on a perfectly healthy deployment. The skip must report as skipped
+// rather than passed-by-accident, must not gate the exit status, and must not
+// issue the request at all — a hostname that does not resolve would otherwise
+// stall the whole run.
+func TestValidateProvider_SkipAuthorizationCheck(t *testing.T) {
+	opts := healthyProviderOpts()
+	opts.Config.Validation.SkipAuthorizationCheck = true
+
+	called := false
+	opts.HTTPClient = &stubHTTPClient{
+		doFn: func(req *http.Request) (*http.Response, error) {
+			if strings.Contains(req.URL.Path, "service-info") {
+				return jsonResponse(http.StatusOK, `{"id":"htsget"}`), nil
+			}
+			called = true
+			return nil, errors.New("no such host")
+		},
+	}
+
+	checks := ValidateProvider(context.Background(), opts)
+
+	authCheck := findCheck(t, checks, "Authorization Service")
+	if !authCheck.Skipped {
+		t.Error("expected the authorization check to report as skipped")
+	}
+	if !authCheck.Passed {
+		t.Error("a skipped check must not gate the exit status")
+	}
+	if !strings.Contains(authCheck.Error, "skipAuthorizationCheck") {
+		t.Errorf("expected the reason to name the setting, got %q", authCheck.Error)
+	}
+	if called {
+		t.Error("expected no HTTP request to the private endpoint when skipping")
+	}
+}
+
+// Without the flag the probe still runs, so a genuinely broken deployment is not
+// hidden by the option existing.
+func TestValidateProvider_AuthorizationCheckRunsByDefault(t *testing.T) {
+	opts := healthyProviderOpts()
+	opts.HTTPClient = &stubHTTPClient{
+		doFn: func(req *http.Request) (*http.Response, error) {
+			if strings.Contains(req.URL.Path, "service-info") {
+				return jsonResponse(http.StatusOK, `{"id":"htsget"}`), nil
+			}
+			return nil, errors.New("no such host")
+		},
+	}
+
+	authCheck := findCheck(t, ValidateProvider(context.Background(), opts), "Authorization Service")
+	if authCheck.Skipped || authCheck.Passed {
+		t.Errorf("expected an unreachable authorization service to fail, got %+v", authCheck)
+	}
+}
+
 func TestValidateProvider_ReportsPerCheckFailures(t *testing.T) {
 	opts := healthyProviderOpts()
 

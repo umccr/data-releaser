@@ -13,6 +13,7 @@ import (
 
 	"github.com/umccr/data-releaser/internal/auth"
 	internalaws "github.com/umccr/data-releaser/internal/aws"
+	"github.com/umccr/data-releaser/internal/config"
 	"github.com/umccr/data-releaser/internal/lattice"
 	"github.com/umccr/data-releaser/internal/manifest"
 	"github.com/umccr/data-releaser/internal/model"
@@ -45,10 +46,22 @@ func parseDuration(s string) (time.Duration, error) {
 	return d, nil
 }
 
-// deriveTargetVpcArn constructs a VPC ARN from the researcher account ID.
-// This is a placeholder derivation; in production the ARN would come from config or lookup.
-func deriveTargetVpcArn(accountID string) string {
-	return fmt.Sprintf("arn:aws:vpc-lattice:ap-southeast-2:%s:servicenetworkserviceassociation/*", accountID)
+// resolveTargetVpcArn determines the VPC ARN the share is keyed on, preferring an
+// explicit --target-vpc-arn flag over the researcher's config entry.
+//
+// There is deliberately no fallback. The authorization callout looks this value up by
+// exact match on a DynamoDB GSI against the VPC ARN htsget-rs forwards, so a derived
+// or guessed ARN does not degrade gracefully — it writes a share that can never
+// authorize anything, and the failure only surfaces later as an unexplained deny.
+func resolveTargetVpcArn(cfg *config.Config, flagValue, accountID string) (string, error) {
+	flagValue = strings.TrimSpace(flagValue)
+	if flagValue == "" {
+		return cfg.ResolveTargetVpcArn(accountID)
+	}
+	if err := config.ValidateTargetVpcArn(flagValue, accountID); err != nil {
+		return "", fmt.Errorf("--target-vpc-arn: %w", err)
+	}
+	return flagValue, nil
 }
 
 var shareCmd = &cobra.Command{
@@ -63,6 +76,10 @@ func init() {
 	shareCmd.Flags().StringSlice("libraries", nil, "Comma-separated list of library IDs to share")
 	shareCmd.Flags().String("account", "", "Target researcher AWS account ID")
 	shareCmd.Flags().String("expiry", "", "Optional expiry duration (e.g. 30d, 24h)")
+	shareCmd.Flags().String("target-vpc-arn", "",
+		"ARN of the researcher VPC associated with the htsget VPC Lattice service network "+
+			"(e.g. arn:aws:ec2:ap-southeast-2:123456789012:vpc/vpc-0123456789abcdef0). "+
+			"Overrides researchers.<account>.targetVpcArn from the config file.")
 
 	_ = shareCmd.MarkFlagRequired("libraries")
 	_ = shareCmd.MarkFlagRequired("account")
@@ -85,6 +102,10 @@ func runShare(cmd *cobra.Command, args []string) error {
 	expiryStr, err := cmd.Flags().GetString("expiry")
 	if err != nil {
 		return fmt.Errorf("reading --expiry flag: %w", err)
+	}
+	targetVpcArnFlag, err := cmd.Flags().GetString("target-vpc-arn")
+	if err != nil {
+		return fmt.Errorf("reading --target-vpc-arn flag: %w", err)
 	}
 
 	// Validate: reject empty library list (Req 1.2)
@@ -128,6 +149,14 @@ func runShare(cmd *cobra.Command, args []string) error {
 	cfg := GetConfig()
 	if cfg == nil {
 		return fmt.Errorf("configuration not loaded")
+	}
+
+	// Resolve the target VPC ARN before doing any work. It is pure input validation and
+	// failing here avoids a partially-completed share whose authorization can never match.
+	targetVpcArn, err := resolveTargetVpcArn(cfg, targetVpcArnFlag, account)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return err
 	}
 
 	factory, err := internalaws.NewClientFactory(ctx, cfg.Profile, "")
@@ -182,17 +211,20 @@ func runShare(cmd *cobra.Command, args []string) error {
 	}
 
 	// --- Step 6: Extract S3 prefixes (Req 1.4) ---
+	// The prefixes are what authorization is granted on. The per-file list is recorded
+	// alongside them purely so the manifest can name each file's htsget request path.
 	prefixes := warehouse.ExtractPrefixes(resolved)
+	files := warehouse.ExtractFiles(resolved)
 
 	// --- Step 7: Idempotency check and create share record (Req 1.5, 12.1) ---
-	store := auth.NewShareStore(factory.DynamoDBClient(), ShareRecordsTableName)
-	targetVpcArn := deriveTargetVpcArn(account)
+	store := auth.NewShareStore(factory.DynamoDBClient(), cfg.Authorization.ShareRecordsTable)
 
 	createInput := auth.CreateInput{
 		ResearcherAccountID: account,
 		TargetVpcArn:        targetVpcArn,
 		LibraryIDs:          cleanLibraries,
 		S3Prefixes:          prefixes,
+		Files:               files,
 		ExpiresAt:           expiresAt,
 	}
 

@@ -117,7 +117,7 @@ func groupByLibrary(shares []*model.ShareRecord) []libraryGrant {
 // computing the effective expiry and building file entries.
 func buildManifestLibrary(grant libraryGrant) model.ManifestLibrary {
 	expiresAt := computeEffectiveExpiry(grant.shares)
-	files := buildFiles(grant.libraryID)
+	files := buildFiles(grant.libraryID, grant.shares)
 
 	return model.ManifestLibrary{
 		LibraryID: grant.libraryID,
@@ -146,13 +146,43 @@ func computeEffectiveExpiry(shares []*model.ShareRecord) *time.Time {
 	return latest
 }
 
-// buildFiles constructs the ManifestFile entries for a library.
-// The htsget request path is `reads/<library_id>` (Req 7.6: reads endpoint; variants out of scope).
-// Access rules are not attached at the share level in the current design (whole-library access).
-func buildFiles(libraryID string) []model.ManifestFile {
-	return []model.ManifestFile{
-		{
-			Request: fmt.Sprintf("reads/%s", libraryID),
-		},
+// buildFiles constructs the ManifestFile entries for a library from the files the
+// granting shares recorded at share time.
+//
+// The request path is `reads/<htsgetId>` (Req 7.6: reads endpoint; variants out of
+// scope), where the id is the object key without its bucket or format extension. The
+// library ID cannot stand in for it: htsget-rs resolves an id against an S3 key, and
+// a library maps to one or more objects whose keys are unrelated to its ID, so
+// `reads/<library_id>` names nothing that can be fetched.
+//
+// Entries are deduplicated and sorted by request path so the manifest is stable when
+// several shares grant the same library. A share written before file recording existed
+// contributes nothing; the library then appears with an empty file list rather than a
+// fabricated path that would 404.
+//
+// Access rules are not attached at the share level in the current design
+// (whole-library access).
+func buildFiles(libraryID string, shares []*model.ShareRecord) []model.ManifestFile {
+	seen := make(map[string]bool)
+	files := make([]model.ManifestFile, 0)
+
+	for _, share := range shares {
+		for _, file := range share.Files {
+			if file.LibraryID != libraryID || file.HtsgetID == "" {
+				continue
+			}
+			request := fmt.Sprintf("reads/%s", file.HtsgetID)
+			if seen[request] {
+				continue
+			}
+			seen[request] = true
+			files = append(files, model.ManifestFile{Request: request})
+		}
 	}
+
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].Request < files[j].Request
+	})
+
+	return files
 }
