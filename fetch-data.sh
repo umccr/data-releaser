@@ -113,7 +113,7 @@ TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 RESP="$TMP/response.json"; META="$TMP/meta.json"
 PAYLOAD="$(jq -nc --arg p "$REQ_PATH" '{path:$p}')"
 
-printf '\n%s▶ htsget request%s  %s%s%s\n' "$BOLD" "$RESET" "$CYAN" "$REQ_PATH" "$RESET"
+printf '\n%shtsget request%s  %s%s%s\n' "$BOLD" "$RESET" "$CYAN" "$REQ_PATH" "$RESET"
 
 if ! aws lambda invoke --function-name "$FUNCTION" \
       --payload "$PAYLOAD" --cli-binary-format raw-in-base64-out \
@@ -125,7 +125,7 @@ fi
 
 fnerr="$(jq -r '.FunctionError // empty' "$META" 2>/dev/null || true)"
 if [[ -n "$fnerr" ]]; then
-  printf '%s✖ Lambda reported FunctionError=%s%s\n' "$RED" "$fnerr" "$RESET" >&2
+  printf '%sLambda reported FunctionError=%s%s\n' "$RED" "$fnerr" "$RESET" >&2
   jq . "$RESP" >&2 || cat "$RESP" >&2
   exit 2
 fi
@@ -152,14 +152,14 @@ hts_body="$(jq -c '.latticeResponse.body' <<<"$outer_body")"
 # ---- denied / not found / any non-ticket response --------------------------
 n_urls="$(jq -r '(.htsget.urls // []) | length' <<<"$hts_body" 2>/dev/null || echo 0)"
 if ! [[ "$n_urls" =~ ^[0-9]+$ ]] || [[ "$n_urls" -eq 0 ]]; then
-  printf '\n%s✖ htsget %s no data returned%s\n' "$RED" "$hts_status" "$RESET"
+  printf '\n%shtsget %s no data returned%s\n' "$RED" "$hts_status" "$RESET"
   hr; jq -C '.' <<<"$hts_body" 2>/dev/null || printf '%s\n' "$hts_body"; hr
   exit 3
 fi
 
 # ---- success: tickets present ---------------------------------------------
 fmt="$(jq -r '.htsget.format // "DATA"' <<<"$hts_body")"
-printf '\n%s✔ htsget %s%s %s%s%s ticket(s), %s%s%s\n' \
+printf '\n%shtsget %s%s %s%s%s ticket(s), %s%s%s\n' \
   "$GREEN" "$hts_status" "$RESET" "$BOLD" "$n_urls" "$RESET" "$BOLD" "$fmt" "$RESET"
 hr
 # Full htsget response — every ticket in full, no truncation.
@@ -203,7 +203,7 @@ for ((i=0; i<n_urls; i++)); do
       printf '  %s[%d/%d]%s HTTP %s %10s bytes  %s%s%s\n' \
         "$GREEN" $((i+1)) "$n_urls" "$RESET" "$code" "$sz" "$DIM" "${rng:+range $rng}" "$RESET"
     else
-      printf '  %s[%d/%d] HTTP %s — FAILED%s\n' "$RED" $((i+1)) "$n_urls" "$code" "$RESET" >&2
+      printf '  %s[%d/%d] HTTP %s FAILED%s\n' "$RED" $((i+1)) "$n_urls" "$code" "$RESET" >&2
       head -c 400 "$part" >&2 2>/dev/null || true; echo >&2
       exit 4
     fi
