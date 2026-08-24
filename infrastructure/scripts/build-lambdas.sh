@@ -12,7 +12,7 @@
 # and are git-ignored (regenerated on every build).
 #
 # Usage:
-#   npm run build:lambdas
+#   pnpm run build:lambdas
 #   # or directly:
 #   bash scripts/build-lambdas.sh
 set -euo pipefail

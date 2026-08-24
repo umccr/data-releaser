@@ -16,7 +16,9 @@ operator-facing walkthrough.
 
 ## Prerequisites
 
-- **Node.js** and **npm** (the CDK app is TypeScript). It pins
+- **Node.js** and **pnpm** (the CDK app is TypeScript). The package manager is
+  pinned via `packageManager` in `infrastructure/package.json`, so
+  `corepack enable` is enough to get the right pnpm version. It pins
   `aws-cdk`/`aws-cdk-lib` `2.160.0`.
 - **Go** matching `go.mod` (`go 1.26.5`) — required to cross-compile the Lambda
   binaries.
@@ -38,8 +40,8 @@ synth or deploy:
 
 ```sh
 cd infrastructure
-npm install
-npm run build:lambdas   # runs scripts/build-lambdas.sh
+pnpm install
+pnpm run build:lambdas   # runs scripts/build-lambdas.sh
 ```
 
 Under the hood `build-lambdas.sh` cross-compiles each entrypoint statically:
@@ -56,16 +58,16 @@ for `<fn>` in `authorization` and `admin`.
 From the `infrastructure/` directory:
 
 ```sh
-npm run build     # tsc typecheck/compile (optional but recommended)
-npm test          # CDK assertion tests over the synthesised template
+pnpm run build     # tsc typecheck/compile (optional but recommended)
+pnpm test          # CDK assertion tests over the synthesised template
 
-npx cdk synth     # synthesise the CloudFormation template (no credentials needed)
-npx cdk deploy    # deploy to the target account/region
+pnpm exec cdk synth     # synthesise the CloudFormation template (no credentials needed)
+pnpm exec cdk deploy    # deploy to the target account/region
 ```
 
 `cdk synth` needs no credentials as long as `account`/`region` match the VPC
 lookup cached in `infrastructure/cdk.context.json` (checked in):
-`npx cdk synth -c account=916218008751 -c region=ap-southeast-2`. A lookup for
+`pnpm exec cdk synth -c account=916218008751 -c region=ap-southeast-2`. A lookup for
 a new account, region or `apiVpcId` needs credentials once to populate that
 cache. `cdk deploy` always uses your resolved AWS credentials.
 
@@ -84,8 +86,8 @@ profile) when not given explicitly.
 ```sh
 # Deploy to the production Data Control account, granting two researcher
 # accounts read on their own manifest prefix.
-npm run build:lambdas
-npx cdk deploy \
+pnpm run build:lambdas
+pnpm exec cdk deploy \
   -c account=916218008751 \
   -c region=ap-southeast-2 \
   -c researcherAccountIds=111111111111,222222222222
@@ -168,7 +170,7 @@ operators out of band.
 ## Redeploying and teardown
 
 Redeploy with the same command after changing parameters or rebuilding the
-Lambda binaries (`npm run build:lambdas` first). The DynamoDB table and
+Lambda binaries (`pnpm run build:lambdas` first). The DynamoDB table and
 Manifest_Bucket use a `RETAIN` removal policy, so they are **not** destroyed when
 the stack is deleted — expired and revoked Share_Records and researcher manifests
 are audit data and must survive stack lifecycle operations. Removing them

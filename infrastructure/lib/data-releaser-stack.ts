@@ -203,7 +203,7 @@ export class DataReleaserStack extends Stack {
     // ---------------------------------------------------------------------
     // Both functions are Go binaries built to a `bootstrap` executable for the
     // provided.al2023 custom runtime on arm64/Graviton (see
-    // scripts/build-lambdas.sh, run via `npm run build:lambdas`). The asset
+    // scripts/build-lambdas.sh, run via `pnpm run build:lambdas`). The asset
     // directories under dist/ are produced by that script before synth/deploy.
     const authAssetPath = path.join(__dirname, "..", "dist", "authorization");
     const adminAssetPath = path.join(__dirname, "..", "dist", "admin");

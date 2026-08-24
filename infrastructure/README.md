@@ -45,8 +45,8 @@ the `dataReleaser` key; override per invocation with `-c key=value`.
 Example — deploy to production Data Control:
 
 ```bash
-npm install
-npm run build:lambdas          # cross-compiles the Go Lambdas (see below)
+pnpm install
+pnpm run build:lambdas          # cross-compiles the Go Lambdas (see below)
 cdk deploy \
   -c account=916218008751 -c region=ap-southeast-2 \
   -c researcherAccountIds=111111111111,222222222222
@@ -56,7 +56,7 @@ cdk deploy \
 
 Both Lambdas are **Go** binaries on the `provided.al2023` custom runtime, targeting
 **arm64/Graviton**. AWS custom runtimes require the executable to be named
-`bootstrap`. `scripts/build-lambdas.sh` (run via `npm run build:lambdas`)
+`bootstrap`. `scripts/build-lambdas.sh` (run via `pnpm run build:lambdas`)
 cross-compiles each entrypoint:
 
 ```bash
@@ -79,7 +79,7 @@ It is **off by default** and deploys only when `-c dataShareTest=true` is set. T
 seed data is not vendored — fetch it first (git-ignored, like `dist/`):
 
 ```bash
-npm run fetch:test-data
+pnpm run fetch:test-data
 cdk deploy DataShareTestStack -c dataShareTest=true \
   -c account=916218008751 -c region=ap-southeast-2
 ```
@@ -108,7 +108,7 @@ Req 16 and is **off by default**; it deploys only when `-c mockMart=true` is set
 and only if you also name the stack:
 
 ```bash
-npm run build
+pnpm run build
 cdk deploy MockMartStack -c mockMart=true \
   -c account=916218008751 -c region=ap-southeast-2 \
   -c mockMartObjects=L2400001=demo/L2400001/NA12878.bam
@@ -230,11 +230,11 @@ cache.
 ## Commands
 
 ```bash
-npm install            # install CDK dependencies
-npm run build:lambdas  # cross-compile the Go Lambdas into dist/
-npm run build          # tsc typecheck/compile
-npm test               # CDK assertion tests over the synthesised template
-npx cdk synth          # synthesise; works with no AWS credentials when
-                       # account/region match the cached lookup in
-                       # cdk.context.json (-c account=916218008751 -c region=ap-southeast-2)
+pnpm install            # install CDK dependencies (respects the lockfile)
+pnpm run build:lambdas  # cross-compile the Go Lambdas into dist/
+pnpm run build          # tsc typecheck/compile
+pnpm test               # CDK assertion tests over the synthesised template
+pnpm exec cdk synth     # synthesise; works with no AWS credentials when
+                        # account/region match the cached lookup in
+                        # cdk.context.json (-c account=916218008751 -c region=ap-southeast-2)
 ```

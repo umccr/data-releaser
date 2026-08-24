@@ -15,5 +15,6 @@ repos:
           (?x)^(
             go\.sum|
             .*/Cargo\.lock|
-            \.secrets\.baseline
+            \.secrets\.baseline|
+            .*/pnpm-lock\.yaml
           )$

@@ -6,20 +6,9 @@ import { Template } from "aws-cdk-lib/assertions";
 import { DataShareTestStack } from "../lib/data-share-test-stack";
 import { dataShareTestBucketName, TEST_DATA_OBJECTS } from "../lib/test-data";
 
-/**
- * Assertions over the mock test-data bucket. The guarantee being pinned here is
- * the one the security review turned on: this bucket cannot leak its contents
- * publicly, and it is disposable rather than a production data location.
- */
-
 const ACCOUNT = "000000000000";
 const REGION = "ap-southeast-2";
 
-/**
- * A throwaway source tree matching TEST_DATA_OBJECTS. BucketDeployment stages the
- * directory at synth time, so the files must actually exist — their contents are
- * irrelevant to the template assertions.
- */
 function makeSourceTree(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "data-share-test-"));
   for (const obj of TEST_DATA_OBJECTS) {
@@ -44,7 +33,7 @@ function synth(): Template {
 describe("Data share test bucket", () => {
   const t = synth();
 
-  it("names the bucket data-share-test-<account>-<region>", () => {
+  it("bucket naming", () => {
     t.hasResourceProperties("AWS::S3::Bucket", {
       BucketName: dataShareTestBucketName(ACCOUNT, REGION),
     });
@@ -61,15 +50,11 @@ describe("Data share test bucket", () => {
     });
   });
 
-  it("is disposable — destroyed with the stack", () => {
+  it("is disposable", () => {
     t.hasResource("AWS::S3::Bucket", { DeletionPolicy: "Delete" });
   });
 
   it("refuses non-TLS requests and never grants a public principal", () => {
-    // enforceSSL adds a Deny for aws:SecureTransport=false. The only Allow the
-    // policy may carry is the autoDeleteObjects cleanup role (a named AWS
-    // principal) — never a wildcard principal, which is the public-read grant
-    // this bucket exists to prove impossible.
     const policies = t.findResources("AWS::S3::BucketPolicy");
     const keys = Object.keys(policies);
     expect(keys).toHaveLength(1);
@@ -91,8 +76,7 @@ describe("Data share test bucket", () => {
     }
   });
 
-  it("uploads the fixture tree to the bucket", () => {
-    // The BucketDeployment custom resource is what puts the objects there.
+  it("uploads the fixture to the bucket", () => {
     t.resourceCountIs("Custom::CDKBucketDeployment", 1);
   });
 });

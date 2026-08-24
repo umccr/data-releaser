@@ -7,11 +7,11 @@
 # Mirrors the dist/ Lambda-build pattern: the output is git-ignored and must
 # exist before `cdk synth`/`cdk deploy` of DataShareTestStack. Run it with:
 #
-#   npm run fetch:test-data
+#   pnpm run fetch:test-data
 #
 # The source repo/ref are overridable for pinning:
 #   HTSGET_RS_REPO=https://github.com/umccr/htsget-rs HTSGET_RS_REF=main \
-#     npm run fetch:test-data
+#     pnpm run fetch:test-data
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

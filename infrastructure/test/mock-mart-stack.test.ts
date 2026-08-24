@@ -2,13 +2,6 @@ import * as cdk from "aws-cdk-lib";
 import { Template, Match } from "aws-cdk-lib/assertions";
 import { MockMartObject, MockMartStack } from "../lib/mock-mart-stack";
 
-/**
- * Assertions over the mock Mart template. The contract being pinned here is the
- * one `internal/warehouse` depends on: the table exposes the columns the
- * resolution query selects, and the workgroup supplies a result output location
- * the CLI never sets itself.
- */
-
 const DEFAULT_OBJECTS: MockMartObject[] = [
   { libraryId: "L2400001", key: "demo/L2400001/NA12878.bam" },
   { libraryId: "L2400002", key: "demo/L2400002/NA12879.bam" },
@@ -38,8 +31,6 @@ describe("Mock Mart Glue catalogue", () => {
   });
 
   it("exposes every column the resolution query selects", () => {
-    // internal/warehouse/warehouse.go: SELECT b.library_id, b.portal_run_id,
-    // b.bucket, b.key, b.format, b.storage_class FROM <db>.bam AS b
     const tables = t.findResources("AWS::Glue::Table");
     const keys = Object.keys(tables);
     expect(keys).toHaveLength(1);
@@ -62,7 +53,7 @@ describe("Mock Mart Glue catalogue", () => {
     }
   });
 
-  it("reads JSON lines with the OpenX SerDe", () => {
+  it("reads JSON lines", () => {
     t.hasResourceProperties("AWS::Glue::Table", {
       TableInput: {
         TableType: "EXTERNAL_TABLE",
@@ -80,9 +71,6 @@ describe("Mock Mart Athena workgroup", () => {
   const t = synth();
 
   it("supplies and enforces a result output location", () => {
-    // The CLI submits StartQueryExecution with no ResultConfiguration
-    // (internal/warehouse/executor.go), so the workgroup must provide one and
-    // enforce it, or every query fails with "No output location provided".
     t.hasResourceProperties("AWS::Athena::WorkGroup", {
       Name: "data-releaser-mock",
       WorkGroupConfiguration: {
@@ -93,8 +81,6 @@ describe("Mock Mart Athena workgroup", () => {
       },
     });
 
-    // The location is an Fn::Join around the bucket's Ref, so assert on the
-    // rendered intrinsic rather than a plain string.
     const groups = t.findResources("AWS::Athena::WorkGroup");
     const config = groups[Object.keys(groups)[0]].Properties.WorkGroupConfiguration;
     const location = JSON.stringify(config.ResultConfiguration.OutputLocation);
@@ -105,8 +91,6 @@ describe("Mock Mart Athena workgroup", () => {
 
 describe("Mock Mart rows", () => {
   it("are deterministic across synths", () => {
-    // Row contents feed an asset hash. Anything time- or random-derived in them
-    // would change the hash on every synth and churn the deployment.
     const a = JSON.stringify(synth().toJSON().Resources);
     const b = JSON.stringify(synth().toJSON().Resources);
     expect(a).toBe(b);

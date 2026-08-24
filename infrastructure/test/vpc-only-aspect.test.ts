@@ -13,15 +13,6 @@ import {
 import { MockMartStack } from "../lib/mock-mart-stack";
 import { VpcOnlyAspect } from "../lib/vpc-only-aspect";
 
-/**
- * The VpcOnlyAspect is what makes "nothing public" a property of the build
- * rather than of review vigilance: these tests pin that every way of
- * configuring a public or VPC-less endpoint fails synth, and that the two CDK
- * custom-resource framework functions (deploy-time-only, CloudFormation-invoked)
- * remain the only exemption.
- */
-
-/** A fresh stack with the aspect applied, plus a helper to synth it. */
 function stackWithAspect(): cdk.Stack {
   const app = new cdk.App();
   const stack = new cdk.Stack(app, "AspectTest", {
@@ -31,11 +22,6 @@ function stackWithAspect(): cdk.Stack {
   return stack;
 }
 
-/**
- * All error annotations on the stack, joined for substring assertions. Error
- * annotations fail `cdk synth` / `cdk deploy` at the CLI; in unit tests they
- * are surfaced through the assertions module rather than by throwing.
- */
 function synthErrors(stack: cdk.Stack): string {
   return AssertionAnnotations.fromStack(stack)
     .findError("*", Match.anyValue())
@@ -43,7 +29,6 @@ function synthErrors(stack: cdk.Stack): string {
     .join("\n");
 }
 
-/** Inline no-op function code for test fixtures. */
 const CODE = lambda.Code.fromInline("exports.handler = () => {};");
 
 function noVpcFunction(stack: cdk.Stack, id = "Fn"): lambda.Function {
@@ -74,7 +59,7 @@ describe("VpcOnlyAspect", () => {
     expect(synthErrors(stack)).toBe("");
   });
 
-  it("rejects a non-PRIVATE REST API", () => {
+  it("rejects a non-private REST API", () => {
     const stack = stackWithAspect();
     const api = new apigw.RestApi(stack, "Api", {
       endpointConfiguration: { types: [apigw.EndpointType.REGIONAL] },
@@ -84,7 +69,7 @@ describe("VpcOnlyAspect", () => {
     expect(errors).toContain("is not a PRIVATE endpoint");
   });
 
-  it("requires a resource policy even on a PRIVATE REST API", () => {
+  it("requires a resource policy even on a private REST API", () => {
     const stack = stackWithAspect();
     const api = new apigw.RestApi(stack, "Api", {
       endpointConfiguration: { types: [apigw.EndpointType.PRIVATE] },
@@ -93,15 +78,15 @@ describe("VpcOnlyAspect", () => {
     expect(synthErrors(stack)).toContain("has no resource policy");
   });
 
-  it("rejects any API Gateway v2 (HTTP) API outright", () => {
+  it("rejects any API Gateway v2 API", () => {
     const stack = stackWithAspect();
     new apigwv2.HttpApi(stack, "HttpApi");
     expect(synthErrors(stack)).toContain(
-      "API Gateway v2 (HTTP/WebSocket) APIs cannot be made PRIVATE",
+      "API Gateway v2 APIs cannot be made PRIVATE",
     );
   });
 
-  it("rejects a Lambda function URL outright", () => {
+  it("rejects a Lambda function URL", () => {
     const stack = stackWithAspect();
     const vpc = new ec2.Vpc(stack, "Vpc", { natGateways: 0 });
     const fn = new lambda.Function(stack, "Fn", {
@@ -140,11 +125,7 @@ describe("VpcOnlyAspect", () => {
     expect(synthErrors(stack)).toContain("does not block all public access");
   });
 
-  it("keeps the mock stacks synthesisable: only the CDK custom-resource providers are exempt", () => {
-    // MockMartStack carries the two framework functions (BucketDeployment's
-    // copier and the autoDeleteObjects cleaner). They are CloudFormation-invoked
-    // deploy-time machinery with no network exposure, and must stay the ONLY
-    // functions the aspect lets through without a VPC.
+  it("keeps the mock stacks synthesisable", () => {
     const app = new cdk.App();
     const stack = new MockMartStack(app, "MockMart", {
       env: { account: "000000000000", region: "ap-southeast-2" },
@@ -159,7 +140,6 @@ describe("VpcOnlyAspect", () => {
     expect(synthErrors(stack)).toBe("");
     const template = Template.fromStack(stack);
 
-    // Every function present is one of the exempt framework providers.
     const functions = template.findResources("AWS::Lambda::Function");
     expect(Object.keys(functions).length).toBeGreaterThan(0);
     for (const [logicalId] of Object.entries(functions)) {

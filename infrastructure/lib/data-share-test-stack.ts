@@ -13,7 +13,7 @@ export interface DataShareTestStackProps extends StackProps {
    * the bucket's key layout, so a file at
    * `<sourcePath>/demo/L2400001/NA12878.bam` lands at
    * `s3://<bucket>/demo/L2400001/NA12878.bam`. Populated from the htsget-rs test
-   * data repo by scripts/fetch-test-data.sh (run `npm run fetch:test-data`).
+   * data repo by scripts/fetch-test-data.sh (run `pnpm run fetch:test-data`).
    */
   readonly sourcePath: string;
 }

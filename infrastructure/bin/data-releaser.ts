@@ -180,9 +180,9 @@ const testBucketName = dataShareTestBucketName(account, region);
 // real system the shareable reads live in a Data_Account outside this repo; for
 // the mock/demo set-up this stack stands up a locked-down, disposable bucket
 // seeded with the public htsget-rs sample data. Deploy after running
-// `npm run fetch:test-data`:
+// `pnpm run fetch:test-data`:
 //
-//   npm run fetch:test-data
+//   pnpm run fetch:test-data
 //   cdk deploy DataShareTestStack -c dataShareTest=true \
 //     -c account=916218008751 -c region=ap-southeast-2
 if (asBoolean("dataShareTest", false)) {
@@ -196,7 +196,7 @@ if (asBoolean("dataShareTest", false)) {
   if (!fs.existsSync(sourcePath) || missing.length > 0) {
     throw new Error(
       `test-data fixtures are missing (${missing.join(", ") || sourcePath}). ` +
-        "Run `npm run fetch:test-data` to download them from the htsget-rs test " +
+        "Run `pnpm run fetch:test-data` to download them from the htsget-rs test " +
         "data repo before synth/deploy of DataShareTestStack.",
     );
   }

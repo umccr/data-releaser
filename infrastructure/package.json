@@ -2,7 +2,7 @@
   "name": "data-releaser-infrastructure",
   "version": "0.1.0",
   "private": true,
-  "description": "AWS CDK app deploying the Data_Control_Account resources for the Data Releaser Authorization Service (Requirement 16).",
+  "description": "AWS CDK app deploying the resources for the Data Releaser Authorization Service.",
   "bin": {
     "data-releaser-infrastructure": "bin/data-releaser.js"
   },
@@ -15,6 +15,7 @@
     "synth": "cdk synth",
     "cdk": "cdk"
   },
+  "packageManager": "pnpm@11.21.0",
   "dependencies": {
     "aws-cdk-lib": "2.160.0",
     "constructs": "10.3.0"
