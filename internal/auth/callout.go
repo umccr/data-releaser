@@ -94,22 +94,26 @@ type CalloutResult struct {
 	Vary string
 }
 
-// HandleCallout processes an authorization callout for the given source VPC ARN.
-// It queries GSI1 (targetVpcArn) to find all shares for that VPC ARN, filters
-// to active shares (non-expired, non-revoked) at read time, and returns a
-// CalloutResponse with location entries (S3 prefixes) from matched shares.
-// Returns an empty htsgetAuth array for no matches (deny).
+// HandleCallout processes an authorization callout for the given source VPC ARN and
+// returns only the response body, using the default cache TTLs.
 //
-// If DynamoDB is unreachable, returns a deny response (empty array) with an error.
+// This is a convenience wrapper over HandleCalloutWithHeaders for callers that do not
+// care about the cache headers; the deployed Lambda uses the full form so it can emit
+// them. Behaviour is otherwise identical: active shares contribute location entries, no
+// match yields an empty htsgetAuth array (deny), and an unreachable store yields a deny
+// plus an error.
 //
 // Requirements: 4.2, 4.3, 4.4, 2.4, 2.5, 2.6
 func (h *CalloutHandler) HandleCallout(ctx context.Context, sourceVpcArn string) (*CalloutResponse, error) {
-	result, err := h.HandleCalloutWithHeaders(ctx, sourceVpcArn, time.Hour, 60*time.Second)
-	if err != nil {
-		return result.Response, err
-	}
-	return result.Response, nil
+	result, err := h.HandleCalloutWithHeaders(ctx, sourceVpcArn, DefaultCacheTTLCeiling, DefaultCacheDenyTTL)
+	return result.Response, err
 }
+
+// Default cache TTLs applied when a caller does not supply its own (Req 13.1, 13.2).
+const (
+	DefaultCacheTTLCeiling = time.Hour
+	DefaultCacheDenyTTL    = 60 * time.Second
+)
 
 // SourceVpcArnHeader is the request header carrying the requester's source VPC
 // ARN on an htsget-rs authorization callout.
@@ -158,34 +162,20 @@ func (h *CalloutHandler) HandleCalloutWithHeaders(ctx context.Context, sourceVpc
 	if err != nil {
 		// DynamoDB unreachable: return deny (empty array) with error indication
 		// Requirements: 10.7 - fail-closed, deny on error
-		denyResponse := &CalloutResponse{
-			Version:    1,
-			HtsgetAuth: []LocationEntry{},
-		}
-		return &CalloutResult{
-			Response:     denyResponse,
-			CacheControl: ComputeCacheControl(nil, now, ceiling, denyTTL),
-			Vary:         VaryIdentityHeaders,
-		}, fmt.Errorf("querying shares for VPC ARN %q: %w", sourceVpcArn, err)
+		return denyResult(now, ceiling, denyTTL), fmt.Errorf("querying shares for VPC ARN %q: %w", sourceVpcArn, err)
 	}
 
 	// Unmarshal results into ShareRecords
 	records, err := unmarshalShareRecords(output.Items)
 	if err != nil {
 		// Malformed data: return deny with error
-		denyResponse := &CalloutResponse{
-			Version:    1,
-			HtsgetAuth: []LocationEntry{},
-		}
-		return &CalloutResult{
-			Response:     denyResponse,
-			CacheControl: ComputeCacheControl(nil, now, ceiling, denyTTL),
-			Vary:         VaryIdentityHeaders,
-		}, fmt.Errorf("unmarshaling share records: %w", err)
+		return denyResult(now, ceiling, denyTTL), fmt.Errorf("unmarshaling share records: %w", err)
 	}
 
-	// Filter to active shares at read time and collect S3 prefixes
-	var locations []LocationEntry
+	// Filter to active shares at read time and collect S3 prefixes.
+	// An empty (not nil) slice matters: it serialises as [] rather than null, which is
+	// what htsget-rs reads as an explicit deny.
+	locations := []LocationEntry{}
 	var activeRecords []*model.ShareRecord
 	for _, record := range records {
 		// Compute effective status at read time (Req 2.4, 2.5, 2.6)
@@ -204,23 +194,28 @@ func (h *CalloutHandler) HandleCalloutWithHeaders(ctx context.Context, sourceVpc
 		}
 	}
 
-	// If no active shares, return empty array (deny) - Req 4.4, 2.6
-	if locations == nil {
-		locations = []LocationEntry{}
-	}
-
-	response := &CalloutResponse{
-		Version:    1,
-		HtsgetAuth: locations,
-	}
-
-	cacheControl := ComputeCacheControl(activeRecords, now, ceiling, denyTTL)
-
 	return &CalloutResult{
-		Response:     response,
-		CacheControl: cacheControl,
+		Response: &CalloutResponse{
+			Version:    1,
+			HtsgetAuth: locations,
+		},
+		CacheControl: ComputeCacheControl(activeRecords, now, ceiling, denyTTL),
 		Vary:         VaryIdentityHeaders,
 	}, nil
+}
+
+// denyResult builds the fail-closed deny response returned when the store cannot be
+// read. The empty htsgetAuth array is the deny signal (Req 4.4, 10.7), and the short
+// negative-cache max-age keeps a backend outage from being cached for long (Req 13.2).
+func denyResult(now time.Time, ceiling, denyTTL time.Duration) *CalloutResult {
+	return &CalloutResult{
+		Response: &CalloutResponse{
+			Version:    1,
+			HtsgetAuth: []LocationEntry{},
+		},
+		CacheControl: ComputeCacheControl(nil, now, ceiling, denyTTL),
+		Vary:         VaryIdentityHeaders,
+	}
 }
 
 // ComputeCacheControl computes the Cache-Control header value for an authorization response.
@@ -252,36 +247,20 @@ func ComputeCacheControl(records []*model.ShareRecord, now time.Time, ceiling ti
 		return fmt.Sprintf("max-age=%d", seconds)
 	}
 
-	// Allow: compute min(remaining lifetime) capped at ceiling (Req 13.1)
+	// Allow: compute min(remaining lifetime), which is already capped at the ceiling
+	// because that is the starting value (Req 13.1).
 	minRemaining := ceiling
 	for _, record := range records {
-		var remaining time.Duration
-		if record.ExpiresAt == nil {
-			// Unlimited shares contribute the ceiling value
-			remaining = ceiling
-		} else {
-			// Expiring shares: remaining = ExpiresAt - now
-			remaining = record.ExpiresAt.Sub(now)
-			if remaining < 0 {
-				remaining = 0
-			}
+		// An unlimited share contributes the ceiling, so it never lowers the result.
+		remaining := ceiling
+		if record.ExpiresAt != nil {
+			remaining = max(record.ExpiresAt.Sub(now), 0)
 		}
-		if remaining < minRemaining {
-			minRemaining = remaining
-		}
+		minRemaining = min(minRemaining, remaining)
 	}
 
-	// Cap at ceiling
-	if minRemaining > ceiling {
-		minRemaining = ceiling
-	}
-
-	// Ensure non-negative
-	if minRemaining < 0 {
-		minRemaining = 0
-	}
-
-	seconds := int64(math.Floor(minRemaining.Seconds()))
+	// A negative ceiling would otherwise yield a negative max-age.
+	seconds := int64(math.Floor(max(minRemaining, 0).Seconds()))
 
 	// Emit s-maxage + public so a shared cache (RFC 9111 §3.5) is explicitly
 	// permitted to store the response even when the request carries an

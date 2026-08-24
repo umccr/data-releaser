@@ -14,6 +14,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ram v1.38.1
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.105.2
 	github.com/aws/aws-sdk-go-v2/service/sts v1.44.1
+	github.com/micahhausler/aws-iam-policy v0.4.4
 	github.com/oklog/ulid/v2 v2.1.1
 	github.com/spf13/cobra v1.10.2
 	gopkg.in/yaml.v3 v3.0.1

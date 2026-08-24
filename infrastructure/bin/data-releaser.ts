@@ -139,6 +139,10 @@ if (ctx("privateApi") !== undefined) {
   );
 }
 
+// Shared by every stack in this app, so all their physical resource names carry the
+// same prefix.
+const namePrefix = asString("namePrefix", "data-releaser");
+
 const apiVpcId = asString("apiVpcId");
 if (apiVpcId === "") {
   throw new Error(
@@ -151,7 +155,7 @@ if (apiVpcId === "") {
 
 new DataReleaserStack(app, "DataReleaserStack", {
   env: { account, region },
-  namePrefix: asString("namePrefix", "data-releaser"),
+  namePrefix,
   stageName: asString("stageName", "prod"),
   researcherAccountIds: asAccountList("researcherAccountIds"),
   cacheTtlCeiling: asString("cacheTtlCeiling", "1h"),
@@ -199,7 +203,7 @@ if (asBoolean("dataShareTest", false)) {
 
   new DataShareTestStack(app, "DataShareTestStack", {
     env: { account, region },
-    namePrefix: asString("namePrefix", "data-releaser"),
+    namePrefix,
     sourcePath,
     description: "Mock test-data bucket seeded from the htsget-rs sample data.",
   });
@@ -218,7 +222,7 @@ if (asBoolean("dataShareTest", false)) {
 if (asBoolean("mockMart", false)) {
   new MockMartStack(app, "MockMartStack", {
     env: { account, region },
-    namePrefix: asString("namePrefix", "data-releaser"),
+    namePrefix,
     // These two must equal warehouse.database / warehouse.athenaWorkgroup in
     // the CLI config: the resolution query is `FROM <database>.bam`, run in the
     // named workgroup. Both are required CLI config fields with no default.

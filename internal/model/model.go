@@ -2,7 +2,14 @@
 // including ShareRecord, AccessRule, Manifest, and ResolvedLibrary.
 package model
 
-import "time"
+import (
+	"errors"
+	"fmt"
+	"regexp"
+	"time"
+
+	awsarn "github.com/aws/aws-sdk-go-v2/aws/arn"
+)
 
 // ShareStatus represents the effective status of a share record.
 type ShareStatus string
@@ -156,4 +163,43 @@ type ResolvedLibrary struct {
 
 	// StorageClass is the S3 storage class (e.g. "STANDARD", "DEEP_ARCHIVE").
 	StorageClass string `json:"storageClass"`
+}
+
+// vpcArnRe matches an EC2 VPC ARN, the form VPC Lattice reports as the source of an
+// invocation and therefore the only form that can match a forwarded identity.
+var vpcArnRe = regexp.MustCompile(`^arn:aws[a-z-]*:ec2:[a-z0-9-]+:\d{12}:vpc/vpc-[0-9a-f]+$`)
+
+// ErrInvalidTargetVpcArn is the sentinel every ValidateTargetVpcArn failure wraps, so
+// callers can tell a rejected ARN (the caller's mistake) from a genuine failure to write
+// the share.
+var ErrInvalidTargetVpcArn = errors.New("invalid target VPC ARN")
+
+// The two failure messages below are worded to read correctly after the sentinel, which
+// fmt places first: "invalid target VPC ARN: <detail>".
+
+// ValidateTargetVpcArn checks that arn is a well-formed EC2 VPC ARN and, when
+// accountID is non-empty, that it belongs to that account. Every failure wraps
+// ErrInvalidTargetVpcArn.
+//
+// Catching this matters because a malformed ARN produces no error downstream — it is
+// simply written to the store and then never matches an authorization callout, so the
+// mistake surfaces much later as an unexplained deny.
+func ValidateTargetVpcArn(arn, accountID string) error {
+	if !vpcArnRe.MatchString(arn) {
+		return fmt.Errorf(
+			"%w: %q is not a valid EC2 VPC ARN; expected the form "+
+				"arn:aws:ec2:<region>:<account-id>:vpc/vpc-<id>, which is what VPC Lattice "+
+				"reports as the source of a request", ErrInvalidTargetVpcArn, arn)
+	}
+	if accountID != "" {
+		// Safe to ignore the parse error: vpcArnRe already matched, so the ARN is
+		// well-formed.
+		parsed, _ := awsarn.Parse(arn)
+		if parsed.AccountID != accountID {
+			return fmt.Errorf(
+				"%w: %q belongs to account %s but the share targets account %s",
+				ErrInvalidTargetVpcArn, arn, parsed.AccountID, accountID)
+		}
+	}
+	return nil
 }

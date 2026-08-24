@@ -46,12 +46,11 @@ func runList(cmd *cobra.Command, args []string) error {
 
 	factory, err := internalaws.NewClientFactory(ctx, cfg.Profile, "")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return err
 	}
 
 	// Create the share store.
-	store := auth.NewShareStore(factory.DynamoDBClient(), shareRecordsTable())
+	store := auth.NewShareStore(factory.DynamoDBClient(), cfg.Authorization.ShareRecordsTable)
 
 	// Query shares.
 	var records []*model.ShareRecord
@@ -61,8 +60,7 @@ func runList(cmd *cobra.Command, args []string) error {
 		records, err = store.ListAll(ctx)
 	}
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: failed to query shares: %v\n", err)
-		return err
+		return fmt.Errorf("failed to query shares: %w", err)
 	}
 
 	// Handle empty results (Req 8.4, 8.6).

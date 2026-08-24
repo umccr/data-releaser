@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/umccr/data-releaser/internal/auth"
+	"github.com/umccr/data-releaser/internal/awstest"
 	"github.com/umccr/data-releaser/internal/config"
 	"github.com/umccr/data-releaser/internal/manifest"
 	"github.com/umccr/data-releaser/internal/model"
@@ -20,8 +21,13 @@ import (
 
 const testTable = config.DefaultShareRecordsTable
 
-func newStore() (*auth.ShareStore, *mockDDB) {
-	m := newMockDDB()
+// otherAccount is a second valid researcher account used by the state-transition tests.
+// Both it and its VPC ARN must be well-formed: ShareStore.Create rejects an ARN that
+// could never match an authorization callout.
+const otherAccount = "123456789012"
+
+func newStore() (*auth.ShareStore, *awstest.DynamoDB) {
+	m := awstest.NewDynamoDB()
 	return auth.NewShareStore(m, testTable), m
 }
 
@@ -60,8 +66,8 @@ func TestShareCreationFlow(t *testing.T) {
 	if reused {
 		t.Error("expected a new share, not a reuse")
 	}
-	if len(m.items) != 1 {
-		t.Fatalf("expected 1 persisted record, got %d", len(m.items))
+	if len(m.Items) != 1 {
+		t.Fatalf("expected 1 persisted record, got %d", len(m.Items))
 	}
 
 	// Manifest reflects the created share.
@@ -92,8 +98,8 @@ func TestShareCreationFlow(t *testing.T) {
 	if rec2.ShareID != rec.ShareID {
 		t.Errorf("expected same share ID on reuse, got %q vs %q", rec2.ShareID, rec.ShareID)
 	}
-	if len(m.items) != 1 {
-		t.Errorf("expected no duplicate record, still 1; got %d", len(m.items))
+	if len(m.Items) != 1 {
+		t.Errorf("expected no duplicate record, still 1; got %d", len(m.Items))
 	}
 }
 
@@ -142,8 +148,8 @@ func TestRevokeConflicts(t *testing.T) {
 	// Already revoked leaves state unchanged (second revoke reports the conflict).
 	store2, _ := newStore()
 	created, err := store2.Create(context.Background(), auth.CreateInput{
-		ResearcherAccountID: "acct",
-		TargetVpcArn:        "arn",
+		ResearcherAccountID: otherAccount,
+		TargetVpcArn:        testgen.VPCArnForAccount(otherAccount),
 		LibraryIDs:          []string{"L1"},
 		S3Prefixes:          []string{"s3://b/p/"},
 	})
@@ -161,8 +167,8 @@ func TestRevokeConflicts(t *testing.T) {
 	store3, _ := newStore()
 	past := time.Now().UTC().Add(-1 * time.Hour)
 	expired, err := store3.Create(context.Background(), auth.CreateInput{
-		ResearcherAccountID: "acct",
-		TargetVpcArn:        "arn",
+		ResearcherAccountID: otherAccount,
+		TargetVpcArn:        testgen.VPCArnForAccount(otherAccount),
 		LibraryIDs:          []string{"L1"},
 		S3Prefixes:          []string{"s3://b/p/"},
 		ExpiresAt:           &past,
@@ -180,8 +186,8 @@ func TestExtendTransition(t *testing.T) {
 	store, _ := newStore()
 	initial := time.Now().UTC().Add(24 * time.Hour)
 	created, err := store.Create(context.Background(), auth.CreateInput{
-		ResearcherAccountID: "acct",
-		TargetVpcArn:        "arn",
+		ResearcherAccountID: otherAccount,
+		TargetVpcArn:        testgen.VPCArnForAccount(otherAccount),
 		LibraryIDs:          []string{"L1"},
 		S3Prefixes:          []string{"s3://b/p/"},
 		ExpiresAt:           &initial,
@@ -213,8 +219,8 @@ func TestExtendConflicts(t *testing.T) {
 	// Revoked share cannot be extended.
 	store2, _ := newStore()
 	created, err := store2.Create(context.Background(), auth.CreateInput{
-		ResearcherAccountID: "acct",
-		TargetVpcArn:        "arn",
+		ResearcherAccountID: otherAccount,
+		TargetVpcArn:        testgen.VPCArnForAccount(otherAccount),
 		LibraryIDs:          []string{"L1"},
 		S3Prefixes:          []string{"s3://b/p/"},
 	})
@@ -232,8 +238,8 @@ func TestExtendConflicts(t *testing.T) {
 	store3, _ := newStore()
 	past := time.Now().UTC().Add(-1 * time.Hour)
 	expired, err := store3.Create(context.Background(), auth.CreateInput{
-		ResearcherAccountID: "acct",
-		TargetVpcArn:        "arn",
+		ResearcherAccountID: otherAccount,
+		TargetVpcArn:        testgen.VPCArnForAccount(otherAccount),
 		LibraryIDs:          []string{"L1"},
 		S3Prefixes:          []string{"s3://b/p/"},
 		ExpiresAt:           &past,

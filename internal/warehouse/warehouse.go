@@ -10,7 +10,10 @@ import (
 
 // validLibraryIDPattern defines the allowed characters for a library ID.
 // Only alphanumeric characters, dashes, underscores, and dots are permitted.
-// This prevents SQL injection since Athena does not support parameterized queries.
+//
+// This is an input-quality check, not a security boundary: the resolution query binds
+// library IDs as Athena execution parameters, so escaping is Athena's job rather than
+// ours. Rejecting odd IDs up front still gives a clearer error than an empty result set.
 var validLibraryIDPattern = regexp.MustCompile(`^[a-zA-Z0-9\-_.]+$`)
 
 // ValidateLibraryID checks whether a library ID contains only safe characters.
@@ -45,38 +48,45 @@ func ValidateLibraryIDs(ids []string) error {
 	return nil
 }
 
-// BuildResolutionQuery constructs the SQL query for resolving library IDs to their
-// associated BAM files in the OrcaVault Mart. The query targets mart.bam only and
+// ResolutionQuery is a parameterized Athena query: SQL carrying positional `?`
+// placeholders, plus the values to bind to them in order.
+type ResolutionQuery struct {
+	// SQL is the query text with one `?` placeholder per library ID.
+	SQL string
+	// Parameters are the values bound to those placeholders, in order.
+	Parameters []string
+}
+
+// BuildResolutionQuery constructs the parameterized query for resolving library IDs to
+// their associated BAM files in the OrcaVault Mart. The query targets mart.bam only and
 // filters to format = 'bam'.
 //
 // The database parameter specifies the Lake Formation resource-link database name
-// (typically "mart") from the config.
+// (typically "mart") from the config. It is interpolated rather than bound, because
+// Athena parameters can only stand in for values, not identifiers — it comes from
+// operator config rather than from a share request, and a bad name fails the query
+// outright rather than changing what it matches.
 //
-// Library IDs are validated before inclusion in the query to prevent SQL injection.
-// Athena does not support traditional parameterized queries, so validation ensures
-// only safe characters (alphanumeric, dash, underscore, dot) appear in the IN clause.
-//
-// Returns the SQL query string or an error if any library ID fails validation.
-func BuildResolutionQuery(database string, libraryIDs []string) (string, error) {
+// Library IDs are bound as execution parameters, so quoting and escaping are Athena's
+// responsibility. They are still validated first, purely to reject obvious nonsense with
+// a clear message.
+func BuildResolutionQuery(database string, libraryIDs []string) (*ResolutionQuery, error) {
 	if err := ValidateLibraryIDs(libraryIDs); err != nil {
-		return "", err
+		return nil, err
 	}
 
 	if database == "" {
-		return "", fmt.Errorf("database name must not be empty")
+		return nil, fmt.Errorf("database name must not be empty")
 	}
 
-	// Build the quoted IN clause values
-	quotedIDs := make([]string, len(libraryIDs))
-	for i, id := range libraryIDs {
-		quotedIDs[i] = "'" + id + "'"
-	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?, ", len(libraryIDs)), ", ")
 
-	query := fmt.Sprintf(
-		`SELECT b.library_id, b.portal_run_id, b.bucket, b.key, b.format, b.storage_class FROM %s.bam AS b WHERE b.library_id IN (%s) AND lower(b.format) = 'bam'`,
-		database,
-		strings.Join(quotedIDs, ", "),
-	)
-
-	return query, nil
+	return &ResolutionQuery{
+		SQL: fmt.Sprintf(
+			`SELECT b.library_id, b.portal_run_id, b.bucket, b.key, b.format, b.storage_class FROM %s.bam AS b WHERE b.library_id IN (%s) AND lower(b.format) = 'bam'`,
+			database,
+			placeholders,
+		),
+		Parameters: libraryIDs,
+	}, nil
 }

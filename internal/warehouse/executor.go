@@ -52,17 +52,13 @@ func (c *Client) SetPollInterval(d time.Duration) {
 //
 // Requirements: 1.3, 1.8
 func (c *Client) ResolveLibraries(ctx context.Context, libraryIDs []string) ([]model.ResolvedLibrary, error) {
-	sql, err := BuildResolutionQuery(c.database, libraryIDs)
+	query, err := BuildResolutionQuery(c.database, libraryIDs)
 	if err != nil {
 		return nil, fmt.Errorf("building resolution query: %w", err)
 	}
 
-	queryID, err := c.startQuery(ctx, sql)
+	queryID, err := c.RunQuery(ctx, query)
 	if err != nil {
-		return nil, fmt.Errorf("starting Athena query: %w", err)
-	}
-
-	if err := c.pollQueryCompletion(ctx, queryID); err != nil {
 		return nil, err
 	}
 
@@ -74,15 +70,44 @@ func (c *Client) ResolveLibraries(ctx context.Context, libraryIDs []string) ([]m
 	return results, nil
 }
 
+// RunQuery submits query to Athena and blocks until it reaches a terminal state,
+// returning the query execution ID of the succeeded query. Callers that only need to
+// know the warehouse is reachable can ignore the ID; callers that want rows follow up
+// with getResults.
+//
+// This is the single implementation of Athena's submit-and-poll cycle, so terminal
+// state handling and poll pacing stay consistent for every caller.
+func (c *Client) RunQuery(ctx context.Context, query *ResolutionQuery) (string, error) {
+	queryID, err := c.startQuery(ctx, query)
+	if err != nil {
+		return "", fmt.Errorf("starting Athena query: %w", err)
+	}
+
+	if err := c.pollQueryCompletion(ctx, queryID); err != nil {
+		return "", err
+	}
+
+	return queryID, nil
+}
+
+// ProbeQuery returns a cheap query that confirms the configured mart.bam table is
+// readable, without returning meaningful data. It takes no parameters.
+func (c *Client) ProbeQuery() *ResolutionQuery {
+	return &ResolutionQuery{SQL: fmt.Sprintf("SELECT 1 FROM %s.bam LIMIT 1", c.database)}
+}
+
 // startQuery submits a query to Athena and returns the query execution ID.
-func (c *Client) startQuery(ctx context.Context, sql string) (string, error) {
+func (c *Client) startQuery(ctx context.Context, query *ResolutionQuery) (string, error) {
 	input := &athena.StartQueryExecutionInput{
-		QueryString: &sql,
+		QueryString: &query.SQL,
 		WorkGroup:   &c.workgroup,
 		QueryExecutionContext: &athenatypes.QueryExecutionContext{
 			Database: &c.database,
 			Catalog:  &c.catalog,
 		},
+		// Bound positionally to the `?` placeholders in SQL. Athena rejects an empty
+		// slice, so it is left nil for a query that has no placeholders.
+		ExecutionParameters: query.Parameters,
 	}
 
 	output, err := c.athena.StartQueryExecution(ctx, input)
@@ -91,7 +116,7 @@ func (c *Client) startQuery(ctx context.Context, sql string) (string, error) {
 	}
 
 	if output.QueryExecutionId == nil {
-		return "", fmt.Errorf("Athena returned nil query execution ID")
+		return "", fmt.Errorf("athena returned nil query execution ID")
 	}
 
 	return *output.QueryExecutionId, nil
@@ -111,7 +136,7 @@ func (c *Client) pollQueryCompletion(ctx context.Context, queryID string) error 
 		}
 
 		if output.QueryExecution == nil || output.QueryExecution.Status == nil {
-			return fmt.Errorf("Athena returned nil query execution status for query %s", queryID)
+			return fmt.Errorf("athena returned nil query execution status for query %s", queryID)
 		}
 
 		state := output.QueryExecution.Status.State
@@ -123,17 +148,17 @@ func (c *Client) pollQueryCompletion(ctx context.Context, queryID string) error 
 			if output.QueryExecution.Status.StateChangeReason != nil {
 				reason = *output.QueryExecution.Status.StateChangeReason
 			}
-			return fmt.Errorf("Athena query %s failed: %s", queryID, reason)
+			return fmt.Errorf("athena query %s failed: %s", queryID, reason)
 		case athenatypes.QueryExecutionStateCancelled:
 			reason := "query was cancelled"
 			if output.QueryExecution.Status.StateChangeReason != nil {
 				reason = *output.QueryExecution.Status.StateChangeReason
 			}
-			return fmt.Errorf("Athena query %s cancelled: %s", queryID, reason)
+			return fmt.Errorf("athena query %s cancelled: %s", queryID, reason)
 		case athenatypes.QueryExecutionStateQueued, athenatypes.QueryExecutionStateRunning:
 			// Still in progress, wait and retry
 		default:
-			return fmt.Errorf("Athena query %s in unexpected state: %s", queryID, state)
+			return fmt.Errorf("athena query %s in unexpected state: %s", queryID, state)
 		}
 
 		select {
@@ -144,21 +169,19 @@ func (c *Client) pollQueryCompletion(ctx context.Context, queryID string) error 
 	}
 }
 
-// getResults retrieves all result rows from a completed Athena query, handling
-// pagination via NextToken, and parses them into ResolvedLibrary structs.
+// getResults retrieves all result rows from a completed Athena query and parses them
+// into ResolvedLibrary structs. Pagination is handled by the SDK's own paginator.
 func (c *Client) getResults(ctx context.Context, queryID string) ([]model.ResolvedLibrary, error) {
 	var results []model.ResolvedLibrary
-	var nextToken *string
+	// A nil colIndex means the header row has not been seen yet, which is only true on
+	// the first page: Athena repeats the column names as row 0 of that page only.
 	var colIndex map[string]int
-	firstPage := true
 
-	for {
-		input := &athena.GetQueryResultsInput{
-			QueryExecutionId: &queryID,
-			NextToken:        nextToken,
-		}
-
-		output, err := c.athena.GetQueryResults(ctx, input)
+	pager := athena.NewGetQueryResultsPaginator(c.athena, &athena.GetQueryResultsInput{
+		QueryExecutionId: &queryID,
+	})
+	for pager.HasMorePages() {
+		output, err := pager.NextPage(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -169,13 +192,12 @@ func (c *Client) getResults(ctx context.Context, queryID string) ([]model.Resolv
 
 		rows := output.ResultSet.Rows
 		startRow := 0
-		if firstPage {
+		if colIndex == nil {
 			if len(rows) == 0 {
 				return nil, fmt.Errorf("no header row found in Athena query results")
 			}
 			colIndex = buildColumnIndex(rows[0])
 			startRow = 1
-			firstPage = false
 		}
 
 		for i := startRow; i < len(rows); i++ {
@@ -184,11 +206,6 @@ func (c *Client) getResults(ctx context.Context, queryID string) ([]model.Resolv
 				return nil, fmt.Errorf("parsing result row %d: %w", i, err)
 			}
 			results = append(results, resolved)
-		}
-
-		nextToken = output.NextToken
-		if nextToken == nil {
-			break
 		}
 	}
 
@@ -209,52 +226,40 @@ func buildColumnIndex(headerRow athenatypes.Row) map[string]int {
 // parseResultRow converts a single Athena result row into a ResolvedLibrary struct
 // using the column index built from the header row.
 func parseResultRow(row athenatypes.Row, colIndex map[string]int) (model.ResolvedLibrary, error) {
-	getValue := func(colName string) (string, error) {
+	// The first missing or out-of-range column wins, matching the previous
+	// fail-on-first-error behaviour without a check after every read.
+	var err error
+	get := func(colName string) string {
 		idx, ok := colIndex[colName]
 		if !ok {
-			return "", fmt.Errorf("column %q not found in result set", colName)
+			if err == nil {
+				err = fmt.Errorf("column %q not found in result set", colName)
+			}
+			return ""
 		}
 		if idx >= len(row.Data) {
-			return "", fmt.Errorf("column %q index %d out of range (row has %d columns)", colName, idx, len(row.Data))
+			if err == nil {
+				err = fmt.Errorf("column %q index %d out of range (row has %d columns)", colName, idx, len(row.Data))
+			}
+			return ""
 		}
-		datum := row.Data[idx]
-		if datum.VarCharValue == nil {
-			return "", nil
+		if datum := row.Data[idx]; datum.VarCharValue != nil {
+			return *datum.VarCharValue
 		}
-		return *datum.VarCharValue, nil
+		return ""
 	}
 
-	libraryID, err := getValue("library_id")
-	if err != nil {
-		return model.ResolvedLibrary{}, err
+	resolved := model.ResolvedLibrary{
+		LibraryID:    get("library_id"),
+		PortalRunID:  get("portal_run_id"),
+		Bucket:       get("bucket"),
+		Key:          get("key"),
+		Format:       get("format"),
+		StorageClass: get("storage_class"),
 	}
-	portalRunID, err := getValue("portal_run_id")
-	if err != nil {
-		return model.ResolvedLibrary{}, err
-	}
-	bucket, err := getValue("bucket")
-	if err != nil {
-		return model.ResolvedLibrary{}, err
-	}
-	key, err := getValue("key")
-	if err != nil {
-		return model.ResolvedLibrary{}, err
-	}
-	format, err := getValue("format")
-	if err != nil {
-		return model.ResolvedLibrary{}, err
-	}
-	storageClass, err := getValue("storage_class")
 	if err != nil {
 		return model.ResolvedLibrary{}, err
 	}
 
-	return model.ResolvedLibrary{
-		LibraryID:    libraryID,
-		PortalRunID:  portalRunID,
-		Bucket:       bucket,
-		Key:          key,
-		Format:       format,
-		StorageClass: storageClass,
-	}, nil
+	return resolved, nil
 }

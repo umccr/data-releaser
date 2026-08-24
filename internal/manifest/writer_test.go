@@ -11,65 +11,14 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 
+	"github.com/umccr/data-releaser/internal/awstest"
 	"github.com/umccr/data-releaser/internal/model"
 )
-
-// mockS3Client implements the S3Client interface for testing.
-type mockS3Client struct {
-	putObjectFn       func(ctx context.Context, params *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error)
-	deleteObjectFn    func(ctx context.Context, params *s3.DeleteObjectInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectOutput, error)
-	headObjectFn      func(ctx context.Context, params *s3.HeadObjectInput, optFns ...func(*s3.Options)) (*s3.HeadObjectOutput, error)
-	headBucketFn      func(ctx context.Context, params *s3.HeadBucketInput, optFns ...func(*s3.Options)) (*s3.HeadBucketOutput, error)
-	getBucketPolicyFn func(ctx context.Context, params *s3.GetBucketPolicyInput, optFns ...func(*s3.Options)) (*s3.GetBucketPolicyOutput, error)
-
-	// Track calls for assertions
-	putCalls        []s3.PutObjectInput
-	deleteCalls     []s3.DeleteObjectInput
-	headBucketCalls []s3.HeadBucketInput
-}
-
-func (m *mockS3Client) PutObject(ctx context.Context, params *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
-	m.putCalls = append(m.putCalls, *params)
-	if m.putObjectFn != nil {
-		return m.putObjectFn(ctx, params, optFns...)
-	}
-	return &s3.PutObjectOutput{}, nil
-}
-
-func (m *mockS3Client) DeleteObject(ctx context.Context, params *s3.DeleteObjectInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectOutput, error) {
-	m.deleteCalls = append(m.deleteCalls, *params)
-	if m.deleteObjectFn != nil {
-		return m.deleteObjectFn(ctx, params, optFns...)
-	}
-	return &s3.DeleteObjectOutput{}, nil
-}
-
-func (m *mockS3Client) HeadObject(ctx context.Context, params *s3.HeadObjectInput, optFns ...func(*s3.Options)) (*s3.HeadObjectOutput, error) {
-	if m.headObjectFn != nil {
-		return m.headObjectFn(ctx, params, optFns...)
-	}
-	return &s3.HeadObjectOutput{}, nil
-}
-
-func (m *mockS3Client) HeadBucket(ctx context.Context, params *s3.HeadBucketInput, optFns ...func(*s3.Options)) (*s3.HeadBucketOutput, error) {
-	m.headBucketCalls = append(m.headBucketCalls, *params)
-	if m.headBucketFn != nil {
-		return m.headBucketFn(ctx, params, optFns...)
-	}
-	return &s3.HeadBucketOutput{}, nil
-}
-
-func (m *mockS3Client) GetBucketPolicy(ctx context.Context, params *s3.GetBucketPolicyInput, optFns ...func(*s3.Options)) (*s3.GetBucketPolicyOutput, error) {
-	if m.getBucketPolicyFn != nil {
-		return m.getBucketPolicyFn(ctx, params, optFns...)
-	}
-	return &s3.GetBucketPolicyOutput{}, nil
-}
 
 const testManifestKey = "manifests/534840902377/manifest.json"
 
 func TestWriter_Upload_Success(t *testing.T) {
-	mock := &mockS3Client{}
+	mock := &awstest.S3{}
 	writer := NewWriter(mock)
 
 	now := time.Date(2026, 7, 10, 4, 0, 0, 0, time.UTC)
@@ -93,11 +42,11 @@ func TestWriter_Upload_Success(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(mock.putCalls) != 1 {
-		t.Fatalf("expected 1 PutObject call, got %d", len(mock.putCalls))
+	if len(mock.PutCalls) != 1 {
+		t.Fatalf("expected 1 PutObject call, got %d", len(mock.PutCalls))
 	}
 
-	call := mock.putCalls[0]
+	call := mock.PutCalls[0]
 	if *call.Bucket != "researcher-bucket" {
 		t.Errorf("bucket: expected %q, got %q", "researcher-bucket", *call.Bucket)
 	}
@@ -132,8 +81,8 @@ func TestWriter_Upload_Success(t *testing.T) {
 }
 
 func TestWriter_Upload_S3Error(t *testing.T) {
-	mock := &mockS3Client{
-		putObjectFn: func(ctx context.Context, params *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
+	mock := &awstest.S3{
+		PutObjectFn: func(ctx context.Context, params *s3.PutObjectInput) (*s3.PutObjectOutput, error) {
 			return nil, errors.New("access denied")
 		},
 	}
@@ -158,7 +107,7 @@ func TestWriter_Upload_S3Error(t *testing.T) {
 }
 
 func TestWriter_Delete_Success(t *testing.T) {
-	mock := &mockS3Client{}
+	mock := &awstest.S3{}
 	writer := NewWriter(mock)
 
 	err := writer.Delete(context.Background(), "researcher-bucket", testManifestKey)
@@ -166,11 +115,11 @@ func TestWriter_Delete_Success(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(mock.deleteCalls) != 1 {
-		t.Fatalf("expected 1 DeleteObject call, got %d", len(mock.deleteCalls))
+	if len(mock.DeleteCalls) != 1 {
+		t.Fatalf("expected 1 DeleteObject call, got %d", len(mock.DeleteCalls))
 	}
 
-	call := mock.deleteCalls[0]
+	call := mock.DeleteCalls[0]
 	if *call.Bucket != "researcher-bucket" {
 		t.Errorf("bucket: expected %q, got %q", "researcher-bucket", *call.Bucket)
 	}
@@ -180,8 +129,8 @@ func TestWriter_Delete_Success(t *testing.T) {
 }
 
 func TestWriter_Delete_S3Error(t *testing.T) {
-	mock := &mockS3Client{
-		deleteObjectFn: func(ctx context.Context, params *s3.DeleteObjectInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectOutput, error) {
+	mock := &awstest.S3{
+		DeleteObjectFn: func(ctx context.Context, params *s3.DeleteObjectInput) (*s3.DeleteObjectOutput, error) {
 			return nil, errors.New("access denied")
 		},
 	}
@@ -194,7 +143,7 @@ func TestWriter_Delete_S3Error(t *testing.T) {
 }
 
 func TestWriter_Sync_NilManifest_Deletes(t *testing.T) {
-	mock := &mockS3Client{}
+	mock := &awstest.S3{}
 	writer := NewWriter(mock)
 
 	err := writer.Sync(context.Background(), "researcher-bucket", testManifestKey, nil)
@@ -203,16 +152,16 @@ func TestWriter_Sync_NilManifest_Deletes(t *testing.T) {
 	}
 
 	// Should call DeleteObject, not PutObject
-	if len(mock.deleteCalls) != 1 {
-		t.Fatalf("expected 1 DeleteObject call, got %d", len(mock.deleteCalls))
+	if len(mock.DeleteCalls) != 1 {
+		t.Fatalf("expected 1 DeleteObject call, got %d", len(mock.DeleteCalls))
 	}
-	if len(mock.putCalls) != 0 {
-		t.Fatalf("expected 0 PutObject calls, got %d", len(mock.putCalls))
+	if len(mock.PutCalls) != 0 {
+		t.Fatalf("expected 0 PutObject calls, got %d", len(mock.PutCalls))
 	}
 }
 
 func TestWriter_Sync_NonNilManifest_Uploads(t *testing.T) {
-	mock := &mockS3Client{}
+	mock := &awstest.S3{}
 	writer := NewWriter(mock)
 
 	manifest := &model.Manifest{
@@ -232,32 +181,32 @@ func TestWriter_Sync_NonNilManifest_Uploads(t *testing.T) {
 	}
 
 	// Should call PutObject, not DeleteObject
-	if len(mock.putCalls) != 1 {
-		t.Fatalf("expected 1 PutObject call, got %d", len(mock.putCalls))
+	if len(mock.PutCalls) != 1 {
+		t.Fatalf("expected 1 PutObject call, got %d", len(mock.PutCalls))
 	}
-	if len(mock.deleteCalls) != 0 {
-		t.Fatalf("expected 0 DeleteObject calls, got %d", len(mock.deleteCalls))
+	if len(mock.DeleteCalls) != 0 {
+		t.Fatalf("expected 0 DeleteObject calls, got %d", len(mock.DeleteCalls))
 	}
 }
 
 func TestWriter_VerifyBucketWritable_Success(t *testing.T) {
-	mock := &mockS3Client{}
+	mock := &awstest.S3{}
 	writer := NewWriter(mock)
 
 	if err := writer.VerifyBucketWritable(context.Background(), "manifest-bucket"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(mock.headBucketCalls) != 1 {
-		t.Fatalf("expected 1 HeadBucket call, got %d", len(mock.headBucketCalls))
+	if len(mock.HeadBucketCalls) != 1 {
+		t.Fatalf("expected 1 HeadBucket call, got %d", len(mock.HeadBucketCalls))
 	}
-	if *mock.headBucketCalls[0].Bucket != "manifest-bucket" {
-		t.Errorf("bucket: expected %q, got %q", "manifest-bucket", *mock.headBucketCalls[0].Bucket)
+	if *mock.HeadBucketCalls[0].Bucket != "manifest-bucket" {
+		t.Errorf("bucket: expected %q, got %q", "manifest-bucket", *mock.HeadBucketCalls[0].Bucket)
 	}
 }
 
 func TestWriter_VerifyBucketWritable_Error(t *testing.T) {
-	mock := &mockS3Client{
-		headBucketFn: func(ctx context.Context, params *s3.HeadBucketInput, optFns ...func(*s3.Options)) (*s3.HeadBucketOutput, error) {
+	mock := &awstest.S3{
+		HeadBucketFn: func(ctx context.Context, params *s3.HeadBucketInput) (*s3.HeadBucketOutput, error) {
 			return nil, errors.New("not found")
 		},
 	}
@@ -271,7 +220,7 @@ func TestWriter_VerifyBucketWritable_Error(t *testing.T) {
 
 func TestWriter_RendersPerAccountKey(t *testing.T) {
 	// Verify the writer uses the caller-supplied per-account key (Req 7.2).
-	mock := &mockS3Client{}
+	mock := &awstest.S3{}
 	writer := NewWriter(mock)
 
 	manifest := &model.Manifest{
@@ -284,10 +233,10 @@ func TestWriter_RendersPerAccountKey(t *testing.T) {
 	if err := writer.Upload(context.Background(), "manifest-bucket", key, manifest); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(mock.putCalls) != 1 {
-		t.Fatalf("expected 1 PutObject call, got %d", len(mock.putCalls))
+	if len(mock.PutCalls) != 1 {
+		t.Fatalf("expected 1 PutObject call, got %d", len(mock.PutCalls))
 	}
-	if *mock.putCalls[0].Key != key {
-		t.Errorf("key: expected %q, got %q", key, *mock.putCalls[0].Key)
+	if *mock.PutCalls[0].Key != key {
+		t.Errorf("key: expected %q, got %q", key, *mock.PutCalls[0].Key)
 	}
 }

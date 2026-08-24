@@ -6,7 +6,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
-	"sort"
+	"slices"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -68,7 +68,17 @@ type CreateInput struct {
 
 // Create persists a new ShareRecord with a generated ULID, computed expiry, s3Prefixes,
 // and status=active. Returns the created ShareRecord.
+//
+// The target VPC ARN is validated here rather than only at the CLI, because this is the
+// single write path every caller shares — the share command, the canary, and the admin
+// Lambda's create endpoint. A malformed ARN produces no error downstream: it is stored
+// happily and then never matches an authorization callout, so the failure surfaces much
+// later as an unexplained deny.
 func (s *ShareStore) Create(ctx context.Context, input CreateInput) (*model.ShareRecord, error) {
+	if err := model.ValidateTargetVpcArn(input.TargetVpcArn, input.ResearcherAccountID); err != nil {
+		return nil, err
+	}
+
 	now := time.Now().UTC()
 	shareID := generateULID()
 
@@ -226,9 +236,9 @@ func (s *ShareStore) ListAll(ctx context.Context) ([]*model.ShareRecord, error) 
 		return nil, err
 	}
 
-	// Sort by createdAt descending
-	sort.Slice(records, func(i, j int) bool {
-		return records[i].CreatedAt.After(records[j].CreatedAt)
+	// Sort by createdAt descending, matching the order ListByAccount gets from the index.
+	slices.SortFunc(records, func(a, b *model.ShareRecord) int {
+		return b.CreatedAt.Compare(a.CreatedAt)
 	})
 
 	return records, nil
@@ -282,26 +292,10 @@ func (s *ShareStore) CreateIdempotent(ctx context.Context, input CreateInput) (*
 }
 
 // libraryIDSetsEqual compares two slices of library IDs as sets (order-independent).
-// Returns true if both contain exactly the same elements.
+// Returns true if both contain exactly the same elements. Both sides are sorted copies:
+// the stored side arrives from a DynamoDB string set, whose order is unspecified.
 func libraryIDSetsEqual(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-
-	sortedA := make([]string, len(a))
-	copy(sortedA, a)
-	sort.Strings(sortedA)
-
-	sortedB := make([]string, len(b))
-	copy(sortedB, b)
-	sort.Strings(sortedB)
-
-	for i := range sortedA {
-		if sortedA[i] != sortedB[i] {
-			return false
-		}
-	}
-	return true
+	return slices.Equal(slices.Sorted(slices.Values(a)), slices.Sorted(slices.Values(b)))
 }
 
 // dynamoShareRecord is the DynamoDB-specific representation of a ShareRecord.
@@ -392,38 +386,30 @@ func unmarshalShareRecord(item map[string]types.AttributeValue) (*model.ShareRec
 	return record, nil
 }
 
-// toDynamoShareFiles converts model share files to their DynamoDB representation.
-// Nil in, nil out, so a record with no files omits the attribute entirely.
-func toDynamoShareFiles(files []model.ShareFile) []dynamoShareFile {
-	if len(files) == 0 {
+// mapFiles converts between the model and DynamoDB share-file representations.
+// Nil or empty in, nil out — so a record with no files omits the attribute entirely
+// (which is also how records written before the attribute existed read back).
+func mapFiles[T, U any](in []T, convert func(T) U) []U {
+	if len(in) == 0 {
 		return nil
 	}
-	out := make([]dynamoShareFile, 0, len(files))
-	for _, f := range files {
-		out = append(out, dynamoShareFile{
-			LibraryID: f.LibraryID,
-			HtsgetID:  f.HtsgetID,
-			Format:    f.Format,
-		})
+	out := make([]U, 0, len(in))
+	for _, v := range in {
+		out = append(out, convert(v))
 	}
 	return out
 }
 
-// fromDynamoShareFiles converts stored share files back to the model type. Records
-// written before the attribute existed simply produce nil.
+func toDynamoShareFiles(files []model.ShareFile) []dynamoShareFile {
+	return mapFiles(files, func(f model.ShareFile) dynamoShareFile {
+		return dynamoShareFile{LibraryID: f.LibraryID, HtsgetID: f.HtsgetID, Format: f.Format}
+	})
+}
+
 func fromDynamoShareFiles(files []dynamoShareFile) []model.ShareFile {
-	if len(files) == 0 {
-		return nil
-	}
-	out := make([]model.ShareFile, 0, len(files))
-	for _, f := range files {
-		out = append(out, model.ShareFile{
-			LibraryID: f.LibraryID,
-			HtsgetID:  f.HtsgetID,
-			Format:    f.Format,
-		})
-	}
-	return out
+	return mapFiles(files, func(f dynamoShareFile) model.ShareFile {
+		return model.ShareFile{LibraryID: f.LibraryID, HtsgetID: f.HtsgetID, Format: f.Format}
+	})
 }
 
 // unmarshalShareRecords converts a slice of DynamoDB items to ShareRecords.

@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -161,6 +162,17 @@ func (h *AdminHandler) HandleCreate(ctx context.Context, req CreateRequest) (*Cr
 
 	record, reused, err := h.store.CreateIdempotent(ctx, input)
 	if err != nil {
+		// A malformed target VPC ARN is the caller's mistake, not a store failure, so it
+		// gets a 400 with the store's explanation of the expected form. The store is the
+		// one place this is checked, which is why it is distinguished here rather than
+		// re-validated above.
+		if errors.Is(err, model.ErrInvalidTargetVpcArn) {
+			return nil, &ErrorResponse{
+				Error:   "invalid targetVpcArn",
+				Code:    ErrCodeInvalidInput,
+				Details: err.Error(),
+			}, http.StatusBadRequest
+		}
 		return nil, &ErrorResponse{
 			Error:   "failed to create share record",
 			Code:    ErrCodeInternal,
@@ -309,123 +321,62 @@ func (h *AdminHandler) HandleList(ctx context.Context, req ListRequest) (*ListRe
 func (h *AdminHandler) HandleRequest(ctx context.Context, method, path string, body []byte) (int, []byte, error) {
 	switch {
 	case method == http.MethodPost && path == "/admin/shares":
-		return h.handleCreateHTTP(ctx, body)
+		return serveJSON(ctx, body, false, h.HandleCreate)
 	case method == http.MethodPost && path == "/admin/shares/revoke":
-		return h.handleRevokeHTTP(ctx, body)
+		return serveJSON(ctx, body, false, h.HandleRevoke)
 	case method == http.MethodPost && path == "/admin/shares/extend":
-		return h.handleExtendHTTP(ctx, body)
+		return serveJSON(ctx, body, false, h.HandleExtend)
 	case method == http.MethodGet && path == "/admin/shares":
-		return h.handleListHTTP(ctx, body)
+		// A GET carries no body; its only parameter is an optional account filter.
+		return serveJSON(ctx, body, true, h.HandleList)
 	default:
-		errResp := ErrorResponse{
+		return marshalError(http.StatusNotFound, &ErrorResponse{
 			Error: fmt.Sprintf("unknown route: %s %s", method, path),
 			Code:  "NOT_FOUND",
-		}
-		respBody, _ := json.Marshal(errResp)
-		return http.StatusNotFound, respBody, nil
+		})
 	}
 }
 
-func (h *AdminHandler) handleCreateHTTP(ctx context.Context, body []byte) (int, []byte, error) {
-	var req CreateRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		errResp := ErrorResponse{
-			Error:   "invalid request body",
-			Code:    ErrCodeInvalidInput,
-			Details: err.Error(),
-		}
-		respBody, _ := json.Marshal(errResp)
-		return http.StatusBadRequest, respBody, nil
-	}
-
-	resp, errResp, status := h.HandleCreate(ctx, req)
-	if errResp != nil {
-		respBody, _ := json.Marshal(errResp)
-		return status, respBody, nil
-	}
-
-	respBody, err := json.Marshal(resp)
-	if err != nil {
-		return http.StatusInternalServerError, nil, fmt.Errorf("marshaling response: %w", err)
-	}
-	return status, respBody, nil
-}
-
-func (h *AdminHandler) handleRevokeHTTP(ctx context.Context, body []byte) (int, []byte, error) {
-	var req RevokeRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		errResp := ErrorResponse{
-			Error:   "invalid request body",
-			Code:    ErrCodeInvalidInput,
-			Details: err.Error(),
-		}
-		respBody, _ := json.Marshal(errResp)
-		return http.StatusBadRequest, respBody, nil
-	}
-
-	resp, errResp, status := h.HandleRevoke(ctx, req)
-	if errResp != nil {
-		respBody, _ := json.Marshal(errResp)
-		return status, respBody, nil
-	}
-
-	respBody, err := json.Marshal(resp)
-	if err != nil {
-		return http.StatusInternalServerError, nil, fmt.Errorf("marshaling response: %w", err)
-	}
-	return status, respBody, nil
-}
-
-func (h *AdminHandler) handleExtendHTTP(ctx context.Context, body []byte) (int, []byte, error) {
-	var req ExtendRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		errResp := ErrorResponse{
-			Error:   "invalid request body",
-			Code:    ErrCodeInvalidInput,
-			Details: err.Error(),
-		}
-		respBody, _ := json.Marshal(errResp)
-		return http.StatusBadRequest, respBody, nil
-	}
-
-	resp, errResp, status := h.HandleExtend(ctx, req)
-	if errResp != nil {
-		respBody, _ := json.Marshal(errResp)
-		return status, respBody, nil
-	}
-
-	respBody, err := json.Marshal(resp)
-	if err != nil {
-		return http.StatusInternalServerError, nil, fmt.Errorf("marshaling response: %w", err)
-	}
-	return status, respBody, nil
-}
-
-func (h *AdminHandler) handleListHTTP(ctx context.Context, body []byte) (int, []byte, error) {
-	var req ListRequest
-	// Body may be empty for GET requests; only parse if non-empty
-	if len(body) > 0 {
+// serveJSON decodes a request body, dispatches it to a typed handler, and marshals
+// whichever of the success or error response came back. This is the single place the
+// admin API's JSON transport concerns live, so every route shapes its bodies and status
+// codes identically.
+//
+// allowEmptyBody tolerates an absent body, which GET routes need — their parameters are
+// all optional, so no body is a valid request rather than a malformed one.
+func serveJSON[Req, Resp any](
+	ctx context.Context,
+	body []byte,
+	allowEmptyBody bool,
+	handle func(context.Context, Req) (*Resp, *ErrorResponse, int),
+) (int, []byte, error) {
+	var req Req
+	if len(body) > 0 || !allowEmptyBody {
 		if err := json.Unmarshal(body, &req); err != nil {
-			errResp := ErrorResponse{
+			return marshalError(http.StatusBadRequest, &ErrorResponse{
 				Error:   "invalid request body",
 				Code:    ErrCodeInvalidInput,
 				Details: err.Error(),
-			}
-			respBody, _ := json.Marshal(errResp)
-			return http.StatusBadRequest, respBody, nil
+			})
 		}
 	}
 
-	resp, errResp, status := h.HandleList(ctx, req)
+	resp, errResp, status := handle(ctx, req)
 	if errResp != nil {
-		respBody, _ := json.Marshal(errResp)
-		return status, respBody, nil
+		return marshalError(status, errResp)
 	}
 
 	respBody, err := json.Marshal(resp)
 	if err != nil {
 		return http.StatusInternalServerError, nil, fmt.Errorf("marshaling response: %w", err)
 	}
+	return status, respBody, nil
+}
+
+// marshalError serialises an error response. ErrorResponse is all strings, so marshaling
+// cannot fail and the error is discarded.
+func marshalError(status int, errResp *ErrorResponse) (int, []byte, error) {
+	respBody, _ := json.Marshal(errResp)
 	return status, respBody, nil
 }
 

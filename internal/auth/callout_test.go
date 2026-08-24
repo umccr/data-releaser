@@ -11,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 
+	"github.com/umccr/data-releaser/internal/awstest"
 	"github.com/umccr/data-releaser/internal/model"
 )
 
@@ -190,11 +191,11 @@ func TestComputeCacheControl_AllowResponse_CustomCeiling(t *testing.T) {
 // --- HandleCalloutWithHeaders integration tests ---
 
 func TestHandleCalloutWithHeaders_DenyOnNoShares(t *testing.T) {
-	mock := newMockDynamoDBClient()
+	mock := awstest.NewDynamoDB()
 	handler := NewCalloutHandler(mock, "ShareRecords")
 
 	// Override queryFn to return empty results (no shares for this VPC ARN)
-	mock.queryFn = func(ctx context.Context, params *dynamodb.QueryInput) (*dynamodb.QueryOutput, error) {
+	mock.QueryFn = func(ctx context.Context, params *dynamodb.QueryInput) (*dynamodb.QueryOutput, error) {
 		return &dynamodb.QueryOutput{
 			Items: nil,
 		}, nil
@@ -216,11 +217,11 @@ func TestHandleCalloutWithHeaders_DenyOnNoShares(t *testing.T) {
 }
 
 func TestHandleCalloutWithHeaders_DenyOnDynamoDBError(t *testing.T) {
-	mock := newMockDynamoDBClient()
+	mock := awstest.NewDynamoDB()
 	handler := NewCalloutHandler(mock, "ShareRecords")
 
 	// Override queryFn to return error (DynamoDB unreachable)
-	mock.queryFn = func(ctx context.Context, params *dynamodb.QueryInput) (*dynamodb.QueryOutput, error) {
+	mock.QueryFn = func(ctx context.Context, params *dynamodb.QueryInput) (*dynamodb.QueryOutput, error) {
 		return nil, fmt.Errorf("dynamodb unavailable")
 	}
 
@@ -243,7 +244,7 @@ func TestHandleCalloutWithHeaders_DenyOnDynamoDBError(t *testing.T) {
 }
 
 func TestHandleCalloutWithHeaders_AllowWithCacheControl(t *testing.T) {
-	mock := newMockDynamoDBClient()
+	mock := awstest.NewDynamoDB()
 	handler := NewCalloutHandler(mock, "ShareRecords")
 
 	// Create a share that expires in 30 minutes
@@ -255,7 +256,7 @@ func TestHandleCalloutWithHeaders_AllowWithCacheControl(t *testing.T) {
 	vpcArn := "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123"
 
 	// Override queryFn to return a matching share
-	mock.queryFn = func(ctx context.Context, params *dynamodb.QueryInput) (*dynamodb.QueryOutput, error) {
+	mock.QueryFn = func(ctx context.Context, params *dynamodb.QueryInput) (*dynamodb.QueryOutput, error) {
 		item := map[string]types.AttributeValue{
 			"shareId":             &types.AttributeValueMemberS{Value: "01TEST123456789012345678"},
 			"researcherAccountId": &types.AttributeValueMemberS{Value: "534840902377"},
@@ -295,7 +296,7 @@ func TestHandleCalloutWithHeaders_AllowWithCacheControl(t *testing.T) {
 }
 
 func TestHandleCalloutWithHeaders_AllowUnlimitedShare(t *testing.T) {
-	mock := newMockDynamoDBClient()
+	mock := awstest.NewDynamoDB()
 	handler := NewCalloutHandler(mock, "ShareRecords")
 
 	now := time.Now().UTC()
@@ -304,7 +305,7 @@ func TestHandleCalloutWithHeaders_AllowUnlimitedShare(t *testing.T) {
 	vpcArn := "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123"
 
 	// Override queryFn to return an unlimited share (no expiresAt)
-	mock.queryFn = func(ctx context.Context, params *dynamodb.QueryInput) (*dynamodb.QueryOutput, error) {
+	mock.QueryFn = func(ctx context.Context, params *dynamodb.QueryInput) (*dynamodb.QueryOutput, error) {
 		item := map[string]types.AttributeValue{
 			"shareId":             &types.AttributeValueMemberS{Value: "01TEST123456789012345678"},
 			"researcherAccountId": &types.AttributeValueMemberS{Value: "534840902377"},
@@ -337,7 +338,7 @@ func TestHandleCalloutWithHeaders_AllowUnlimitedShare(t *testing.T) {
 }
 
 func TestHandleCalloutWithHeaders_SkipsExpiredShares(t *testing.T) {
-	mock := newMockDynamoDBClient()
+	mock := awstest.NewDynamoDB()
 	handler := NewCalloutHandler(mock, "ShareRecords")
 
 	now := time.Now().UTC()
@@ -348,7 +349,7 @@ func TestHandleCalloutWithHeaders_SkipsExpiredShares(t *testing.T) {
 	vpcArn := "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123"
 
 	// Override queryFn to return an expired share
-	mock.queryFn = func(ctx context.Context, params *dynamodb.QueryInput) (*dynamodb.QueryOutput, error) {
+	mock.QueryFn = func(ctx context.Context, params *dynamodb.QueryInput) (*dynamodb.QueryOutput, error) {
 		item := map[string]types.AttributeValue{
 			"shareId":             &types.AttributeValueMemberS{Value: "01TEST123456789012345678"},
 			"researcherAccountId": &types.AttributeValueMemberS{Value: "534840902377"},
@@ -379,7 +380,7 @@ func TestHandleCalloutWithHeaders_SkipsExpiredShares(t *testing.T) {
 }
 
 func TestHandleCalloutWithHeaders_SkipsRevokedShares(t *testing.T) {
-	mock := newMockDynamoDBClient()
+	mock := awstest.NewDynamoDB()
 	handler := NewCalloutHandler(mock, "ShareRecords")
 
 	now := time.Now().UTC()
@@ -390,7 +391,7 @@ func TestHandleCalloutWithHeaders_SkipsRevokedShares(t *testing.T) {
 	vpcArn := "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123"
 
 	// Override queryFn to return a revoked share
-	mock.queryFn = func(ctx context.Context, params *dynamodb.QueryInput) (*dynamodb.QueryOutput, error) {
+	mock.QueryFn = func(ctx context.Context, params *dynamodb.QueryInput) (*dynamodb.QueryOutput, error) {
 		item := map[string]types.AttributeValue{
 			"shareId":             &types.AttributeValueMemberS{Value: "01TEST123456789012345678"},
 			"researcherAccountId": &types.AttributeValueMemberS{Value: "534840902377"},
@@ -421,11 +422,11 @@ func TestHandleCalloutWithHeaders_SkipsRevokedShares(t *testing.T) {
 }
 
 func TestHandleCallout_BackwardCompatible(t *testing.T) {
-	mock := newMockDynamoDBClient()
+	mock := awstest.NewDynamoDB()
 	handler := NewCalloutHandler(mock, "ShareRecords")
 
 	// Override queryFn to return empty results
-	mock.queryFn = func(ctx context.Context, params *dynamodb.QueryInput) (*dynamodb.QueryOutput, error) {
+	mock.QueryFn = func(ctx context.Context, params *dynamodb.QueryInput) (*dynamodb.QueryOutput, error) {
 		return &dynamodb.QueryOutput{
 			Items: nil,
 		}, nil

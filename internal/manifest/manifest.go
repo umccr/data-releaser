@@ -3,8 +3,8 @@
 package manifest
 
 import (
-	"fmt"
-	"sort"
+	"cmp"
+	"slices"
 	"time"
 
 	"github.com/umccr/data-releaser/internal/model"
@@ -61,8 +61,8 @@ func (g *Generator) Generate(shares []model.ShareRecord, now time.Time) *model.M
 	}
 
 	// Sort libraries by ID for deterministic output
-	sort.Slice(libraries, func(i, j int) bool {
-		return libraries[i].LibraryID < libraries[j].LibraryID
+	slices.SortFunc(libraries, func(a, b model.ManifestLibrary) int {
+		return cmp.Compare(a.LibraryID, b.LibraryID)
 	})
 
 	return &model.Manifest{
@@ -106,8 +106,8 @@ func groupByLibrary(shares []*model.ShareRecord) []libraryGrant {
 	for _, grant := range grantMap {
 		grants = append(grants, *grant)
 	}
-	sort.Slice(grants, func(i, j int) bool {
-		return grants[i].libraryID < grants[j].libraryID
+	slices.SortFunc(grants, func(a, b libraryGrant) int {
+		return cmp.Compare(a.libraryID, b.libraryID)
 	})
 
 	return grants
@@ -171,7 +171,7 @@ func buildFiles(libraryID string, shares []*model.ShareRecord) []model.ManifestF
 			if file.LibraryID != libraryID || file.HtsgetID == "" {
 				continue
 			}
-			request := fmt.Sprintf("reads/%s", file.HtsgetID)
+			request := "reads/" + file.HtsgetID
 			if seen[request] {
 				continue
 			}
@@ -180,8 +180,8 @@ func buildFiles(libraryID string, shares []*model.ShareRecord) []model.ManifestF
 		}
 	}
 
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].Request < files[j].Request
+	slices.SortFunc(files, func(a, b model.ManifestFile) int {
+		return cmp.Compare(a.Request, b.Request)
 	})
 
 	return files

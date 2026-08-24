@@ -15,6 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 
+	"github.com/umccr/data-releaser/internal/awstest"
 	"github.com/umccr/data-releaser/internal/config"
 )
 
@@ -85,8 +86,8 @@ func healthyProviderOpts() ValidateProviderOpts {
 	return ValidateProviderOpts{
 		STSClient:             &stubSTSClient{},
 		AthenaClient:          succeedingAthena(),
-		S3Client:              &stubS3Client{},
-		DynamoDBClient:        newStubDDBClient(),
+		S3Client:              &awstest.S3{},
+		DynamoDBClient:        awstest.NewDynamoDB(),
 		APIGatewayClient:      &stubAPIGatewayClient{},
 		HTTPClient:            healthyHTTPClient(),
 		Config:                healthyProviderConfig(),
@@ -212,14 +213,14 @@ func TestValidateProvider_ReportsPerCheckFailures(t *testing.T) {
 	opts := healthyProviderOpts()
 
 	// Fail three independent infrastructure checks; the rest stay healthy.
-	ddb := newStubDDBClient()
-	ddb.describeFn = func(ctx context.Context, params *dynamodb.DescribeTableInput) (*dynamodb.DescribeTableOutput, error) {
+	ddb := awstest.NewDynamoDB()
+	ddb.DescribeTableFn = func(ctx context.Context, params *dynamodb.DescribeTableInput) (*dynamodb.DescribeTableOutput, error) {
 		return nil, errors.New("ResourceNotFoundException: table missing")
 	}
 	opts.DynamoDBClient = ddb
 
-	opts.S3Client = &stubS3Client{
-		headBucketFn: func(ctx context.Context, params *s3.HeadBucketInput) (*s3.HeadBucketOutput, error) {
+	opts.S3Client = &awstest.S3{
+		HeadBucketFn: func(ctx context.Context, params *s3.HeadBucketInput) (*s3.HeadBucketOutput, error) {
 			return nil, errors.New("NotFound: bucket missing")
 		},
 	}

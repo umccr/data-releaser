@@ -1,6 +1,7 @@
 package warehouse
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -68,10 +69,12 @@ func TestBuildResolutionQuery(t *testing.T) {
 		database   string
 		libraryIDs []string
 		wantErr    bool
-		// Substrings the query must contain when successful
+		// Substrings the SQL must contain when successful
 		wantContains []string
-		// Substrings the query must NOT contain when successful
+		// Substrings the SQL must NOT contain when successful
 		wantNotContains []string
+		// Values expected to be bound to the SQL's placeholders, in order
+		wantParameters []string
 	}{
 		{
 			name:       "single library ID",
@@ -80,7 +83,7 @@ func TestBuildResolutionQuery(t *testing.T) {
 			wantErr:    false,
 			wantContains: []string{
 				"mart.bam AS b",
-				"b.library_id IN ('L2400001')",
+				"b.library_id IN (?)",
 				"lower(b.format) = 'bam'",
 				"b.library_id",
 				"b.portal_run_id",
@@ -89,6 +92,7 @@ func TestBuildResolutionQuery(t *testing.T) {
 				"b.format",
 				"b.storage_class",
 			},
+			wantParameters: []string{"L2400001"},
 		},
 		{
 			name:       "multiple library IDs",
@@ -96,10 +100,11 @@ func TestBuildResolutionQuery(t *testing.T) {
 			libraryIDs: []string{"L2400001", "L2400002", "L2400003"},
 			wantErr:    false,
 			wantContains: []string{
-				"b.library_id IN ('L2400001', 'L2400002', 'L2400003')",
+				"b.library_id IN (?, ?, ?)",
 				"mart.bam AS b",
 				"lower(b.format) = 'bam'",
 			},
+			wantParameters: []string{"L2400001", "L2400002", "L2400003"},
 		},
 		{
 			name:       "custom database name",
@@ -112,6 +117,7 @@ func TestBuildResolutionQuery(t *testing.T) {
 			wantNotContains: []string{
 				"FROM mart.bam",
 			},
+			wantParameters: []string{"L2400001"},
 		},
 		{
 			name:       "empty database name",
@@ -137,8 +143,9 @@ func TestBuildResolutionQuery(t *testing.T) {
 			libraryIDs: []string{"L2400-001_v2.1"},
 			wantErr:    false,
 			wantContains: []string{
-				"b.library_id IN ('L2400-001_v2.1')",
+				"b.library_id IN (?)",
 			},
+			wantParameters: []string{"L2400-001_v2.1"},
 		},
 	}
 
@@ -154,16 +161,43 @@ func TestBuildResolutionQuery(t *testing.T) {
 			}
 
 			for _, substr := range tt.wantContains {
-				if !strings.Contains(query, substr) {
-					t.Errorf("BuildResolutionQuery() query missing expected substring %q\nGot: %s", substr, query)
+				if !strings.Contains(query.SQL, substr) {
+					t.Errorf("BuildResolutionQuery() SQL missing expected substring %q\nGot: %s", substr, query.SQL)
 				}
 			}
 			for _, substr := range tt.wantNotContains {
-				if strings.Contains(query, substr) {
-					t.Errorf("BuildResolutionQuery() query should not contain %q\nGot: %s", substr, query)
+				if strings.Contains(query.SQL, substr) {
+					t.Errorf("BuildResolutionQuery() SQL should not contain %q\nGot: %s", substr, query.SQL)
 				}
 			}
+			if !slices.Equal(query.Parameters, tt.wantParameters) {
+				t.Errorf("BuildResolutionQuery() Parameters = %v, want %v", query.Parameters, tt.wantParameters)
+			}
 		})
+	}
+}
+
+// TestBuildResolutionQuery_BindsIDsRatherThanInliningThem pins the property the
+// parameterized form exists for: an ID never becomes part of the SQL text, so escaping is
+// Athena's job. The IDs here are the ones ValidateLibraryID accepts; the ones it rejects
+// never reach this function.
+func TestBuildResolutionQuery_BindsIDsRatherThanInliningThem(t *testing.T) {
+	ids := []string{"L2400001", "L2400-001_v2.1"}
+	query, err := BuildResolutionQuery("mart", ids)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	for _, id := range ids {
+		if strings.Contains(query.SQL, id) {
+			t.Errorf("SQL inlines library ID %q instead of binding it\nGot: %s", id, query.SQL)
+		}
+	}
+	if got, want := strings.Count(query.SQL, "?"), len(ids); got != want {
+		t.Errorf("SQL has %d placeholders, want %d\nGot: %s", got, want, query.SQL)
+	}
+	if !slices.Equal(query.Parameters, ids) {
+		t.Errorf("Parameters = %v, want %v", query.Parameters, ids)
 	}
 }
 
@@ -183,8 +217,8 @@ func TestBuildResolutionQuery_SelectsCorrectColumns(t *testing.T) {
 		"b.storage_class",
 	}
 	for _, col := range expectedColumns {
-		if !strings.Contains(query, col) {
-			t.Errorf("query missing column %q\nGot: %s", col, query)
+		if !strings.Contains(query.SQL, col) {
+			t.Errorf("query missing column %q\nGot: %s", col, query.SQL)
 		}
 	}
 }
@@ -196,16 +230,16 @@ func TestBuildResolutionQuery_QueriesBamTableOnly(t *testing.T) {
 	}
 
 	// Must reference mart.bam
-	if !strings.Contains(query, "mart.bam") {
-		t.Errorf("query should reference mart.bam\nGot: %s", query)
+	if !strings.Contains(query.SQL, "mart.bam") {
+		t.Errorf("query should reference mart.bam\nGot: %s", query.SQL)
 	}
 
 	// Must NOT reference other mart tables
-	if strings.Contains(query, "mart.lims") {
-		t.Errorf("query should not reference mart.lims\nGot: %s", query)
+	if strings.Contains(query.SQL, "mart.lims") {
+		t.Errorf("query should not reference mart.lims\nGot: %s", query.SQL)
 	}
-	if strings.Contains(query, "mart.output") {
-		t.Errorf("query should not reference mart.output\nGot: %s", query)
+	if strings.Contains(query.SQL, "mart.output") {
+		t.Errorf("query should not reference mart.output\nGot: %s", query.SQL)
 	}
 }
 
@@ -216,7 +250,7 @@ func TestBuildResolutionQuery_FiltersBamFormatOnly(t *testing.T) {
 	}
 
 	// Must filter to format = 'bam'
-	if !strings.Contains(query, "lower(b.format) = 'bam'") {
-		t.Errorf("query should filter to format = 'bam'\nGot: %s", query)
+	if !strings.Contains(query.SQL, "lower(b.format) = 'bam'") {
+		t.Errorf("query should filter to format = 'bam'\nGot: %s", query.SQL)
 	}
 }

@@ -9,6 +9,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/aws/aws-sdk-go-v2/service/ram"
 	ramtypes "github.com/aws/aws-sdk-go-v2/service/ram/types"
+
+	"github.com/umccr/data-releaser/internal/awstest"
 )
 
 func associatedRAM() *stubRAMClient {
@@ -58,7 +60,7 @@ func TestValidateResearcher_ContinuesOnFailure(t *testing.T) {
 	opts := ValidateResearcherOpts{
 		RAMClient:      ramClient,
 		LambdaClient:   &stubLambdaClient{}, // no functions -> Test_Lambda unavailable
-		S3Client:       &stubS3Client{},     // empty policy -> grant check fails
+		S3Client:       &awstest.S3{},       // empty policy -> grant check fails
 		AccountID:      "534840902377",
 		ManifestBucket: "data-control-manifest-bucket",
 		ManifestPrefix: "manifests/534840902377/*",

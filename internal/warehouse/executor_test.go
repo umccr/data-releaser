@@ -3,6 +3,8 @@ package warehouse
 import (
 	"context"
 	"fmt"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -479,6 +481,68 @@ func TestResolveLibraries_InvalidLibraryIDs(t *testing.T) {
 	_, err := client.ResolveLibraries(context.Background(), []string{"bad;id"})
 	if err == nil {
 		t.Fatal("expected error for invalid library ID")
+	}
+}
+
+// TestResolveLibraries_BindsExecutionParameters checks that library IDs reach Athena as
+// execution parameters rather than as SQL text, which is what makes escaping Athena's job.
+func TestResolveLibraries_BindsExecutionParameters(t *testing.T) {
+	libraryIDs := []string{"L2400001", "L2400002"}
+
+	mock := &mockAthenaClient{
+		startQueryFn: func(ctx context.Context, params *athena.StartQueryExecutionInput, optFns ...func(*athena.Options)) (*athena.StartQueryExecutionOutput, error) {
+			if got := params.ExecutionParameters; !slices.Equal(got, libraryIDs) {
+				t.Errorf("expected ExecutionParameters %v, got %v", libraryIDs, got)
+			}
+			for _, id := range libraryIDs {
+				if strings.Contains(*params.QueryString, id) {
+					t.Errorf("query string inlines library ID %q instead of binding it: %s", id, *params.QueryString)
+				}
+			}
+			return &athena.StartQueryExecutionOutput{QueryExecutionId: aws.String("query-bound")}, nil
+		},
+		getQueryFn: func(ctx context.Context, params *athena.GetQueryExecutionInput, optFns ...func(*athena.Options)) (*athena.GetQueryExecutionOutput, error) {
+			return &athena.GetQueryExecutionOutput{
+				QueryExecution: &athenatypes.QueryExecution{
+					Status: &athenatypes.QueryExecutionStatus{State: athenatypes.QueryExecutionStateSucceeded},
+				},
+			}, nil
+		},
+		getResultsFn: func(ctx context.Context, params *athena.GetQueryResultsInput, optFns ...func(*athena.Options)) (*athena.GetQueryResultsOutput, error) {
+			return &athena.GetQueryResultsOutput{
+				ResultSet: &athenatypes.ResultSet{Rows: []athenatypes.Row{makeHeaderRow()}},
+			}, nil
+		},
+	}
+
+	if _, err := newTestClient(mock).ResolveLibraries(context.Background(), libraryIDs); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// TestProbeQuery_BindsNoParameters guards the reachability probe against Athena's
+// rejection of an empty ExecutionParameters slice: the probe has no placeholders, so it
+// must send nil rather than an empty list.
+func TestProbeQuery_BindsNoParameters(t *testing.T) {
+	mock := &mockAthenaClient{
+		startQueryFn: func(ctx context.Context, params *athena.StartQueryExecutionInput, optFns ...func(*athena.Options)) (*athena.StartQueryExecutionOutput, error) {
+			if params.ExecutionParameters != nil {
+				t.Errorf("expected nil ExecutionParameters for the probe, got %v", params.ExecutionParameters)
+			}
+			return &athena.StartQueryExecutionOutput{QueryExecutionId: aws.String("query-probe")}, nil
+		},
+		getQueryFn: func(ctx context.Context, params *athena.GetQueryExecutionInput, optFns ...func(*athena.Options)) (*athena.GetQueryExecutionOutput, error) {
+			return &athena.GetQueryExecutionOutput{
+				QueryExecution: &athenatypes.QueryExecution{
+					Status: &athenatypes.QueryExecutionStatus{State: athenatypes.QueryExecutionStateSucceeded},
+				},
+			}, nil
+		},
+	}
+
+	client := newTestClient(mock)
+	if _, err := client.RunQuery(context.Background(), client.ProbeQuery()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

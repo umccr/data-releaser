@@ -12,8 +12,6 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/apigateway"
-	"github.com/aws/aws-sdk-go-v2/service/athena"
-	athenatypes "github.com/aws/aws-sdk-go-v2/service/athena/types"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
@@ -21,6 +19,8 @@ import (
 	"github.com/umccr/data-releaser/internal/auth"
 	internalaws "github.com/umccr/data-releaser/internal/aws"
 	"github.com/umccr/data-releaser/internal/config"
+	"github.com/umccr/data-releaser/internal/manifest"
+	"github.com/umccr/data-releaser/internal/warehouse"
 )
 
 // Check represents the result of a single validation check.
@@ -37,6 +37,17 @@ type Check struct {
 // skip returns a skipped, non-failing check with the given reason.
 func skip(name, reason string) Check {
 	return Check{Name: name, Passed: true, Skipped: true, Error: reason}
+}
+
+// pass returns a check that ran and succeeded.
+func pass(name string) Check {
+	return Check{Name: name, Passed: true}
+}
+
+// fail returns a failing check whose Error is the formatted reason. Passed is left
+// false, so a check only ever passes by saying so explicitly.
+func fail(name, format string, args ...any) Check {
+	return Check{Name: name, Error: fmt.Sprintf(format, args...)}
 }
 
 // HTTPClient is an interface for making HTTP requests (allows testing).
@@ -88,105 +99,39 @@ func ValidateProvider(ctx context.Context, opts ValidateProviderOpts) []Check {
 // checkCredentials verifies that AWS credentials resolve and are functional
 // by calling STS GetCallerIdentity.
 func checkCredentials(ctx context.Context, stsClient internalaws.STSClient) Check {
-	check := Check{Name: "Credential Resolution (STS GetCallerIdentity)"}
+	const name = "Credential Resolution (STS GetCallerIdentity)"
 
 	output, err := stsClient.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
 	if err != nil {
-		check.Passed = false
-		check.Error = fmt.Sprintf("credential check failed: %v", err)
-		return check
+		return fail(name, "credential check failed: %v", err)
 	}
 
 	if output.Account == nil || *output.Account == "" {
-		check.Passed = false
-		check.Error = "credential check failed: STS returned empty account"
-		return check
+		return fail(name, "credential check failed: STS returned empty account")
 	}
 
-	check.Passed = true
-	return check
+	return pass(name)
 }
 
-// checkOrcaVaultMart verifies the OrcaVault Mart is reachable via Athena
-// by executing a probe query: SELECT 1 FROM mart.bam LIMIT 1
+// probeTimeout bounds how long the Athena reachability probe waits for a terminal
+// query state before reporting the mart unreachable.
+const probeTimeout = 60 * time.Second
+
+// checkOrcaVaultMart verifies the OrcaVault Mart is reachable via Athena by running a
+// probe query through the warehouse client, so submit-and-poll behaviour is shared with
+// the real resolution path rather than reimplemented here.
 func checkOrcaVaultMart(ctx context.Context, athenaClient internalaws.AthenaClient, whCfg config.WarehouseConfig) Check {
-	check := Check{Name: "OrcaVault Mart Reachability (Athena)"}
+	const name = "OrcaVault Mart Reachability (Athena)"
 
-	probeSQL := fmt.Sprintf("SELECT 1 FROM %s.bam LIMIT 1", whCfg.Database)
-
-	startInput := &athena.StartQueryExecutionInput{
-		QueryString: &probeSQL,
-		WorkGroup:   &whCfg.AthenaWorkgroup,
-		QueryExecutionContext: &athenatypes.QueryExecutionContext{
-			Database: &whCfg.Database,
-			Catalog:  &whCfg.Catalog,
-		},
-	}
-
-	startOutput, err := athenaClient.StartQueryExecution(ctx, startInput)
-	if err != nil {
-		check.Passed = false
-		check.Error = fmt.Sprintf("Athena probe query failed to start: %v", err)
-		return check
-	}
-
-	if startOutput.QueryExecutionId == nil {
-		check.Passed = false
-		check.Error = "Athena returned nil query execution ID"
-		return check
-	}
-
-	queryID := *startOutput.QueryExecutionId
-
-	// Poll for completion (with timeout)
-	pollCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	probeCtx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
 
-	getInput := &athena.GetQueryExecutionInput{
-		QueryExecutionId: &queryID,
+	client := warehouse.NewClient(athenaClient, whCfg)
+	if _, err := client.RunQuery(probeCtx, client.ProbeQuery()); err != nil {
+		return fail(name, "Athena probe query failed: %v", err)
 	}
 
-	for {
-		getOutput, err := athenaClient.GetQueryExecution(pollCtx, getInput)
-		if err != nil {
-			check.Passed = false
-			check.Error = fmt.Sprintf("Athena probe query polling failed: %v", err)
-			return check
-		}
-
-		if getOutput.QueryExecution == nil || getOutput.QueryExecution.Status == nil {
-			check.Passed = false
-			check.Error = "Athena returned nil query execution status"
-			return check
-		}
-
-		state := getOutput.QueryExecution.Status.State
-		switch state {
-		case athenatypes.QueryExecutionStateSucceeded:
-			check.Passed = true
-			return check
-		case athenatypes.QueryExecutionStateFailed:
-			reason := "unknown error"
-			if getOutput.QueryExecution.Status.StateChangeReason != nil {
-				reason = *getOutput.QueryExecution.Status.StateChangeReason
-			}
-			check.Passed = false
-			check.Error = fmt.Sprintf("Athena probe query failed: %s", reason)
-			return check
-		case athenatypes.QueryExecutionStateCancelled:
-			check.Passed = false
-			check.Error = "Athena probe query was cancelled"
-			return check
-		}
-
-		select {
-		case <-pollCtx.Done():
-			check.Passed = false
-			check.Error = "Athena probe query timed out waiting for completion"
-			return check
-		case <-time.After(1 * time.Second):
-		}
-	}
+	return pass(name)
 }
 
 // checkAuthorizationService verifies the Authorization Service is reachable
@@ -199,18 +144,16 @@ func checkOrcaVaultMart(ctx context.Context, athenaClient internalaws.AthenaClie
 // validation.skipAuthorizationCheck for that topology and probe the callout from
 // inside the VPC instead.
 func checkAuthorizationService(ctx context.Context, httpClient HTTPClient, authEndpoint string, valCfg config.ValidationConfig) Check {
-	check := Check{Name: "Authorization Service Reachability"}
+	const name = "Authorization Service Reachability"
 
 	if valCfg.SkipAuthorizationCheck {
-		return skip(check.Name,
+		return skip(name,
 			"skipped: validation.skipAuthorizationCheck is set because the authorization "+
 				"API is private and only reachable through its VPC interface endpoint")
 	}
 
 	if authEndpoint == "" {
-		check.Passed = false
-		check.Error = "authorization endpoint not configured"
-		return check
+		return fail(name, "authorization endpoint not configured")
 	}
 
 	// Issue a GET request to the authorization endpoint using a VPC ARN that belongs
@@ -220,9 +163,7 @@ func checkAuthorizationService(ctx context.Context, httpClient HTTPClient, authE
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, authEndpoint, nil)
 	if err != nil {
-		check.Passed = false
-		check.Error = fmt.Sprintf("failed to construct request: %v", err)
-		return check
+		return fail(name, "failed to construct request: %v", err)
 	}
 
 	// Send the identity the same way htsget-rs does, as a forwarded context header,
@@ -231,42 +172,31 @@ func checkAuthorizationService(ctx context.Context, httpClient HTTPClient, authE
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		check.Passed = false
-		check.Error = fmt.Sprintf("authorization service unreachable: %v", err)
-		return check
+		return fail(name, "authorization service unreachable: %v", err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		check.Passed = false
-		check.Error = fmt.Sprintf("failed to read authorization service response: %v", err)
-		return check
+		return fail(name, "failed to read authorization service response: %v", err)
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		check.Passed = false
-		check.Error = fmt.Sprintf("authorization service returned HTTP %d: %s", resp.StatusCode, string(body))
-		return check
+		return fail(name, "authorization service returned HTTP %d: %s", resp.StatusCode, string(body))
 	}
 
 	// Verify response is valid JSON with expected schema structure
-	var authResp map[string]interface{}
+	var authResp map[string]any
 	if err := json.Unmarshal(body, &authResp); err != nil {
-		check.Passed = false
-		check.Error = fmt.Sprintf("authorization service response is not valid JSON: %v", err)
-		return check
+		return fail(name, "authorization service response is not valid JSON: %v", err)
 	}
 
 	// Check for the presence of the htsgetAuth field (schema conformance)
 	if _, ok := authResp["htsgetAuth"]; !ok {
-		check.Passed = false
-		check.Error = "authorization service response missing 'htsgetAuth' field (schema non-conformant)"
-		return check
+		return fail(name, "authorization service response missing 'htsgetAuth' field (schema non-conformant)")
 	}
 
-	check.Passed = true
-	return check
+	return pass(name)
 }
 
 // checkHtsgetRs verifies the Htsget_Rs endpoint is healthy by hitting the
@@ -278,154 +208,115 @@ func checkAuthorizationService(ctx context.Context, httpClient HTTPClient, authE
 // htsget-rs from inside the consumer VPC instead (the aws-vpc-lattice consumer
 // construct's optional test Lambda does exactly this).
 func checkHtsgetRs(ctx context.Context, httpClient HTTPClient, htsgetBaseURL string, valCfg config.ValidationConfig) Check {
-	check := Check{Name: "Htsget_Rs Health (service-info)"}
+	const name = "Htsget_Rs Health (service-info)"
 
 	if valCfg.SkipHtsgetCheck {
-		return skip(check.Name,
+		return skip(name,
 			"skipped: validation.skipHtsgetCheck is set because htsget-rs is only "+
 				"reachable from inside a VPC associated with its VPC Lattice service network")
 	}
 
 	if htsgetBaseURL == "" {
-		check.Passed = false
-		check.Error = "htsgetBaseUrl not configured"
-		return check
+		return fail(name, "htsgetBaseUrl not configured")
 	}
 
-	url := htsgetBaseURL + "/service-info"
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, htsgetBaseURL+"/service-info", nil)
 	if err != nil {
-		check.Passed = false
-		check.Error = fmt.Sprintf("failed to construct request: %v", err)
-		return check
+		return fail(name, "failed to construct request: %v", err)
 	}
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		check.Passed = false
-		check.Error = fmt.Sprintf("htsget-rs unreachable: %v", err)
-		return check
+		return fail(name, "htsget-rs unreachable: %v", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		check.Passed = false
-		check.Error = fmt.Sprintf("htsget-rs /service-info returned HTTP %d (expected 200)", resp.StatusCode)
-		return check
+		return fail(name, "htsget-rs /service-info returned HTTP %d (expected 200)", resp.StatusCode)
 	}
 
-	check.Passed = true
-	return check
+	return pass(name)
 }
 
 // checkCrossAccountS3 verifies cross-account S3 access by issuing a HeadObject
 // on a configured canary object in the Data Account.
 func checkCrossAccountS3(ctx context.Context, s3Client internalaws.S3Client, valCfg config.ValidationConfig) Check {
-	check := Check{Name: "Cross-Account S3 Access (Data Account)"}
+	const name = "Cross-Account S3 Access (Data Account)"
 
 	if valCfg.Canary == nil {
-		check.Passed = false
-		check.Error = "no canary configuration found (validation.canary not set in config)"
-		return check
+		return fail(name, "no canary configuration found (validation.canary not set in config)")
 	}
 
 	if valCfg.Canary.Bucket == "" || valCfg.Canary.Key == "" {
-		check.Passed = false
-		check.Error = "canary bucket or key not configured (validation.canary.bucket and validation.canary.key required)"
-		return check
+		return fail(name, "canary bucket or key not configured (validation.canary.bucket and validation.canary.key required)")
 	}
 
-	input := &s3.HeadObjectInput{
+	_, err := s3Client.HeadObject(ctx, &s3.HeadObjectInput{
 		Bucket: &valCfg.Canary.Bucket,
 		Key:    &valCfg.Canary.Key,
-	}
-
-	_, err := s3Client.HeadObject(ctx, input)
+	})
 	if err != nil {
-		check.Passed = false
-		check.Error = fmt.Sprintf("S3 HeadObject on canary object failed: %v", err)
-		return check
+		return fail(name, "S3 HeadObject on canary object failed: %v", err)
 	}
 
-	check.Passed = true
-	return check
+	return pass(name)
 }
 
 // checkShareRecordsTable verifies the Share_Record DynamoDB table provisioned by the
 // Infrastructure_Stack exists and is active (Req 15.10).
 func checkShareRecordsTable(ctx context.Context, ddbClient internalaws.DynamoDBClient, tableName string) Check {
-	check := Check{Name: "Share_Record DynamoDB Table (Infrastructure_Stack)"}
+	const name = "Share_Record DynamoDB Table (Infrastructure_Stack)"
 
 	if ddbClient == nil {
-		check.Passed = false
-		check.Error = "DynamoDB client not configured"
-		return check
+		return fail(name, "DynamoDB client not configured")
 	}
 	if tableName == "" {
-		check.Passed = false
-		check.Error = "Share_Record table name not configured"
-		return check
+		return fail(name, "Share_Record table name not configured")
 	}
 
 	_, err := ddbClient.DescribeTable(ctx, &dynamodb.DescribeTableInput{
 		TableName: aws.String(tableName),
 	})
 	if err != nil {
-		check.Passed = false
-		check.Error = fmt.Sprintf("DynamoDB table %q not found or inaccessible; "+
+		return fail(name, "DynamoDB table %q not found or inaccessible; "+
 			"the Infrastructure_Stack DynamoDB table deployment step is missing or misconfigured: %v", tableName, err)
-		return check
 	}
 
-	check.Passed = true
-	return check
+	return pass(name)
 }
 
 // checkManifestBucket verifies the Manifest_Bucket provisioned by the Infrastructure_Stack
 // exists and is writable by the Data Control identity via a HeadBucket call (Req 15.10).
 func checkManifestBucket(ctx context.Context, s3Client internalaws.S3Client, bucket string) Check {
-	check := Check{Name: "Manifest_Bucket (Infrastructure_Stack)"}
+	const name = "Manifest_Bucket (Infrastructure_Stack)"
 
 	if bucket == "" {
-		check.Passed = false
-		check.Error = "manifest.bucket not configured; the Manifest_Bucket name must be sourced from the Infrastructure_Stack output"
-		return check
+		return fail(name, "manifest.bucket not configured; the Manifest_Bucket name must be sourced from the Infrastructure_Stack output")
 	}
 
-	_, err := s3Client.HeadBucket(ctx, &s3.HeadBucketInput{
-		Bucket: aws.String(bucket),
-	})
-	if err != nil {
-		check.Passed = false
-		check.Error = fmt.Sprintf("manifest bucket %q missing or not writable by the Data Control identity; "+
+	// Same reachability test the share preflight uses, so both agree on what a usable
+	// Manifest_Bucket is.
+	if err := manifest.NewWriter(s3Client).VerifyBucketWritable(ctx, bucket); err != nil {
+		return fail(name, "manifest bucket %q missing or not writable by the Data Control identity; "+
 			"the Infrastructure_Stack Manifest_Bucket deployment step is missing or misconfigured: %v", bucket, err)
-		return check
 	}
 
-	check.Passed = true
-	return check
+	return pass(name)
 }
 
 // checkAPIGatewayStage verifies the API Gateway REST API stage named in configuration
 // exists (Req 15.10).
 func checkAPIGatewayStage(ctx context.Context, apiClient internalaws.APIGatewayClient, endpoints config.EndpointsConfig) Check {
-	check := Check{Name: "API Gateway REST API Stage (Infrastructure_Stack)"}
+	const name = "API Gateway REST API Stage (Infrastructure_Stack)"
 
 	if apiClient == nil {
-		check.Passed = false
-		check.Error = "API Gateway client not configured"
-		return check
+		return fail(name, "API Gateway client not configured")
 	}
 	if endpoints.APIGatewayRestAPIID == "" {
-		check.Passed = false
-		check.Error = "endpoints.apiGatewayRestApiId not configured; cannot verify the API Gateway stage"
-		return check
+		return fail(name, "endpoints.apiGatewayRestApiId not configured; cannot verify the API Gateway stage")
 	}
 	if endpoints.APIGatewayStageName == "" {
-		check.Passed = false
-		check.Error = "endpoints.apiGatewayStageName not configured; cannot verify the API Gateway stage"
-		return check
+		return fail(name, "endpoints.apiGatewayStageName not configured; cannot verify the API Gateway stage")
 	}
 
 	_, err := apiClient.GetStage(ctx, &apigateway.GetStageInput{
@@ -433,13 +324,10 @@ func checkAPIGatewayStage(ctx context.Context, apiClient internalaws.APIGatewayC
 		StageName: aws.String(endpoints.APIGatewayStageName),
 	})
 	if err != nil {
-		check.Passed = false
-		check.Error = fmt.Sprintf("API Gateway stage %q on REST API %q not found; "+
+		return fail(name, "API Gateway stage %q on REST API %q not found; "+
 			"the Infrastructure_Stack API Gateway deployment step is missing or misconfigured: %v",
 			endpoints.APIGatewayStageName, endpoints.APIGatewayRestAPIID, err)
-		return check
 	}
 
-	check.Passed = true
-	return check
+	return pass(name)
 }

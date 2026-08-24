@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/umccr/data-releaser/internal/model"
 )
 
 // Config represents the full application configuration.
@@ -54,32 +56,6 @@ type ResearcherConfig struct {
 	TargetVpcArn string `yaml:"targetVpcArn"`
 }
 
-// vpcArnRe matches an EC2 VPC ARN, the form VPC Lattice reports as the source of an
-// invocation and therefore the only form that can match a forwarded identity.
-var vpcArnRe = regexp.MustCompile(`^arn:aws[a-z-]*:ec2:[a-z0-9-]+:\d{12}:vpc/vpc-[0-9a-f]+$`)
-
-// ValidateTargetVpcArn checks that arn is a well-formed EC2 VPC ARN and, when
-// accountID is non-empty, that it belongs to that account. Catching this at share
-// time matters because a malformed ARN produces no error downstream — it is simply
-// written to the store and then never matches an authorization callout.
-func ValidateTargetVpcArn(arn, accountID string) error {
-	if !vpcArnRe.MatchString(arn) {
-		return fmt.Errorf(
-			"target VPC ARN %q is not a valid EC2 VPC ARN; expected the form "+
-				"arn:aws:ec2:<region>:<account-id>:vpc/vpc-<id>, which is what VPC Lattice "+
-				"reports as the source of a request", arn)
-	}
-	if accountID != "" {
-		parts := strings.Split(arn, ":")
-		if parts[4] != accountID {
-			return fmt.Errorf(
-				"target VPC ARN %q belongs to account %s but the share targets account %s",
-				arn, parts[4], accountID)
-		}
-	}
-	return nil
-}
-
 // ResolveTargetVpcArn returns the configured target VPC ARN for a researcher account.
 // It returns an error when the account has no entry, because there is no safe value to
 // fall back to: a guessed ARN would never match a real request.
@@ -95,7 +71,7 @@ func (cfg *Config) ResolveTargetVpcArn(accountID string) (string, error) {
 	}
 
 	arn := strings.TrimSpace(researcher.TargetVpcArn)
-	if err := ValidateTargetVpcArn(arn, accountID); err != nil {
+	if err := model.ValidateTargetVpcArn(arn, accountID); err != nil {
 		return "", fmt.Errorf("researchers.%s.targetVpcArn: %w", accountID, err)
 	}
 	return arn, nil
@@ -230,8 +206,9 @@ func (d *Duration) UnmarshalYAML(value *yaml.Node) error {
 	return nil
 }
 
-// MarshalYAML serializes a Duration back to its string form.
-func (d Duration) MarshalYAML() (interface{}, error) {
+// MarshalYAML serializes a Duration back to its string form, so a config round-trips
+// through YAML as "1h" rather than a nanosecond count.
+func (d Duration) MarshalYAML() (any, error) {
 	return d.Duration.String(), nil
 }
 
@@ -349,7 +326,7 @@ func validate(cfg *Config) error {
 			errs = append(errs, fmt.Sprintf("researchers.%s.targetVpcArn is required", accountID))
 			continue
 		}
-		if err := ValidateTargetVpcArn(arn, accountID); err != nil {
+		if err := model.ValidateTargetVpcArn(arn, accountID); err != nil {
 			errs = append(errs, fmt.Sprintf("researchers.%s.targetVpcArn: %v", accountID, err))
 		}
 	}
@@ -366,11 +343,13 @@ type ValidationError struct {
 }
 
 func (e *ValidationError) Error() string {
-	msg := "configuration validation failed:"
+	var b strings.Builder
+	b.WriteString("configuration validation failed:")
 	for _, err := range e.Errors {
-		msg += "\n  - " + err
+		b.WriteString("\n  - ")
+		b.WriteString(err)
 	}
-	return msg
+	return b.String()
 }
 
 // ApplyFlagOverrides updates the config with any CLI flag values that were explicitly set.

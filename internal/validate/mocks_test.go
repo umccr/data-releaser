@@ -6,20 +6,20 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/apigateway"
 	"github.com/aws/aws-sdk-go-v2/service/athena"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/aws/aws-sdk-go-v2/service/ram"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 
 	internalaws "github.com/umccr/data-releaser/internal/aws"
 )
 
 // This file collects configurable mocks for the AWS-client interfaces the validate
-// package depends on. Each mock exposes function fields so individual tests can inject
-// success or failure behaviour without a live AWS account. Defaults return successful,
-// empty responses so a test only overrides the seam it cares about.
+// package depends on and nothing else does. The DynamoDB and S3 doubles, which several
+// packages need, live in internal/awstest instead.
+//
+// Each mock exposes function fields so individual tests can inject success or failure
+// behaviour without a live AWS account. Defaults return successful, empty responses so a
+// test only overrides the seam it cares about.
 
 // --- STS ---------------------------------------------------------------------
 
@@ -67,144 +67,6 @@ func (m *stubAthenaClient) GetQueryResults(ctx context.Context, params *athena.G
 		return m.getResultsFn(ctx, params)
 	}
 	return &athena.GetQueryResultsOutput{}, nil
-}
-
-// --- S3 ----------------------------------------------------------------------
-
-type stubS3Client struct {
-	putObjectFn       func(ctx context.Context, params *s3.PutObjectInput) (*s3.PutObjectOutput, error)
-	deleteObjectFn    func(ctx context.Context, params *s3.DeleteObjectInput) (*s3.DeleteObjectOutput, error)
-	headObjectFn      func(ctx context.Context, params *s3.HeadObjectInput) (*s3.HeadObjectOutput, error)
-	headBucketFn      func(ctx context.Context, params *s3.HeadBucketInput) (*s3.HeadBucketOutput, error)
-	getBucketPolicyFn func(ctx context.Context, params *s3.GetBucketPolicyInput) (*s3.GetBucketPolicyOutput, error)
-}
-
-var _ internalaws.S3Client = (*stubS3Client)(nil)
-
-func (m *stubS3Client) PutObject(ctx context.Context, params *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
-	if m.putObjectFn != nil {
-		return m.putObjectFn(ctx, params)
-	}
-	return &s3.PutObjectOutput{}, nil
-}
-
-func (m *stubS3Client) DeleteObject(ctx context.Context, params *s3.DeleteObjectInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectOutput, error) {
-	if m.deleteObjectFn != nil {
-		return m.deleteObjectFn(ctx, params)
-	}
-	return &s3.DeleteObjectOutput{}, nil
-}
-
-func (m *stubS3Client) HeadObject(ctx context.Context, params *s3.HeadObjectInput, optFns ...func(*s3.Options)) (*s3.HeadObjectOutput, error) {
-	if m.headObjectFn != nil {
-		return m.headObjectFn(ctx, params)
-	}
-	return &s3.HeadObjectOutput{}, nil
-}
-
-func (m *stubS3Client) HeadBucket(ctx context.Context, params *s3.HeadBucketInput, optFns ...func(*s3.Options)) (*s3.HeadBucketOutput, error) {
-	if m.headBucketFn != nil {
-		return m.headBucketFn(ctx, params)
-	}
-	return &s3.HeadBucketOutput{}, nil
-}
-
-func (m *stubS3Client) GetBucketPolicy(ctx context.Context, params *s3.GetBucketPolicyInput, optFns ...func(*s3.Options)) (*s3.GetBucketPolicyOutput, error) {
-	if m.getBucketPolicyFn != nil {
-		return m.getBucketPolicyFn(ctx, params)
-	}
-	return &s3.GetBucketPolicyOutput{}, nil
-}
-
-// --- DynamoDB ----------------------------------------------------------------
-
-// stubDDBClient is a configurable DynamoDB mock. It keeps an in-memory item map keyed
-// by shareId so it can back a real auth.ShareStore (used by the canary tests), while
-// still allowing per-test overrides of DescribeTable and the other operations.
-type stubDDBClient struct {
-	items        map[string]map[string]types.AttributeValue
-	describeFn   func(ctx context.Context, params *dynamodb.DescribeTableInput) (*dynamodb.DescribeTableOutput, error)
-	putItemFn    func(ctx context.Context, params *dynamodb.PutItemInput) (*dynamodb.PutItemOutput, error)
-	getItemFn    func(ctx context.Context, params *dynamodb.GetItemInput) (*dynamodb.GetItemOutput, error)
-	updateItemFn func(ctx context.Context, params *dynamodb.UpdateItemInput) (*dynamodb.UpdateItemOutput, error)
-}
-
-var _ internalaws.DynamoDBClient = (*stubDDBClient)(nil)
-
-func newStubDDBClient() *stubDDBClient {
-	return &stubDDBClient{items: make(map[string]map[string]types.AttributeValue)}
-}
-
-func (m *stubDDBClient) PutItem(ctx context.Context, params *dynamodb.PutItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.PutItemOutput, error) {
-	if m.putItemFn != nil {
-		return m.putItemFn(ctx, params)
-	}
-	if m.items != nil {
-		if idAttr, ok := params.Item["shareId"].(*types.AttributeValueMemberS); ok {
-			m.items[idAttr.Value] = params.Item
-		}
-	}
-	return &dynamodb.PutItemOutput{}, nil
-}
-
-func (m *stubDDBClient) GetItem(ctx context.Context, params *dynamodb.GetItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.GetItemOutput, error) {
-	if m.getItemFn != nil {
-		return m.getItemFn(ctx, params)
-	}
-	if idAttr, ok := params.Key["shareId"].(*types.AttributeValueMemberS); ok {
-		if item, exists := m.items[idAttr.Value]; exists {
-			return &dynamodb.GetItemOutput{Item: item}, nil
-		}
-	}
-	return &dynamodb.GetItemOutput{}, nil
-}
-
-func (m *stubDDBClient) UpdateItem(ctx context.Context, params *dynamodb.UpdateItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.UpdateItemOutput, error) {
-	if m.updateItemFn != nil {
-		return m.updateItemFn(ctx, params)
-	}
-	// Apply revokedAt / expiresAt updates onto the stored item so state transitions
-	// (e.g. the canary cleanup revoke) are observable in follow-up assertions.
-	if idAttr, ok := params.Key["shareId"].(*types.AttributeValueMemberS); ok {
-		if item, exists := m.items[idAttr.Value]; exists {
-			if v, ok := params.ExpressionAttributeValues[":revokedAt"]; ok {
-				item["revokedAt"] = v
-			}
-			if v, ok := params.ExpressionAttributeValues[":expiresAt"]; ok {
-				item["expiresAt"] = v
-			}
-		}
-	}
-	return &dynamodb.UpdateItemOutput{}, nil
-}
-
-func (m *stubDDBClient) Query(ctx context.Context, params *dynamodb.QueryInput, optFns ...func(*dynamodb.Options)) (*dynamodb.QueryOutput, error) {
-	var items []map[string]types.AttributeValue
-	accountID := ""
-	if v, ok := params.ExpressionAttributeValues[":accountId"].(*types.AttributeValueMemberS); ok {
-		accountID = v.Value
-	}
-	for _, item := range m.items {
-		if acct, ok := item["researcherAccountId"].(*types.AttributeValueMemberS); ok && acct.Value == accountID {
-			items = append(items, item)
-		}
-	}
-	return &dynamodb.QueryOutput{Items: items}, nil
-}
-
-func (m *stubDDBClient) Scan(ctx context.Context, params *dynamodb.ScanInput, optFns ...func(*dynamodb.Options)) (*dynamodb.ScanOutput, error) {
-	var items []map[string]types.AttributeValue
-	for _, item := range m.items {
-		items = append(items, item)
-	}
-	return &dynamodb.ScanOutput{Items: items}, nil
-}
-
-func (m *stubDDBClient) DescribeTable(ctx context.Context, params *dynamodb.DescribeTableInput, optFns ...func(*dynamodb.Options)) (*dynamodb.DescribeTableOutput, error) {
-	if m.describeFn != nil {
-		return m.describeFn(ctx, params)
-	}
-	return &dynamodb.DescribeTableOutput{}, nil
 }
 
 // --- API Gateway -------------------------------------------------------------

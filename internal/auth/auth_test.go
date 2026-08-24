@@ -9,110 +9,12 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 
+	"github.com/umccr/data-releaser/internal/awstest"
 	"github.com/umccr/data-releaser/internal/model"
 )
 
-// mockDynamoDBClient implements the DynamoDBClient interface for testing.
-type mockDynamoDBClient struct {
-	items     map[string]map[string]types.AttributeValue // keyed by shareId
-	putItemFn func(ctx context.Context, params *dynamodb.PutItemInput) (*dynamodb.PutItemOutput, error)
-	getItemFn func(ctx context.Context, params *dynamodb.GetItemInput) (*dynamodb.GetItemOutput, error)
-	updateFn  func(ctx context.Context, params *dynamodb.UpdateItemInput) (*dynamodb.UpdateItemOutput, error)
-	queryFn   func(ctx context.Context, params *dynamodb.QueryInput) (*dynamodb.QueryOutput, error)
-	scanFn    func(ctx context.Context, params *dynamodb.ScanInput) (*dynamodb.ScanOutput, error)
-}
-
-func newMockDynamoDBClient() *mockDynamoDBClient {
-	m := &mockDynamoDBClient{
-		items: make(map[string]map[string]types.AttributeValue),
-	}
-
-	// Default PutItem: store the item
-	m.putItemFn = func(ctx context.Context, params *dynamodb.PutItemInput) (*dynamodb.PutItemOutput, error) {
-		if shareIDAttr, ok := params.Item["shareId"]; ok {
-			if s, ok := shareIDAttr.(*types.AttributeValueMemberS); ok {
-				m.items[s.Value] = params.Item
-			}
-		}
-		return &dynamodb.PutItemOutput{}, nil
-	}
-
-	// Default GetItem: retrieve from stored items
-	m.getItemFn = func(ctx context.Context, params *dynamodb.GetItemInput) (*dynamodb.GetItemOutput, error) {
-		if shareIDAttr, ok := params.Key["shareId"]; ok {
-			if s, ok := shareIDAttr.(*types.AttributeValueMemberS); ok {
-				if item, exists := m.items[s.Value]; exists {
-					return &dynamodb.GetItemOutput{Item: item}, nil
-				}
-			}
-		}
-		return &dynamodb.GetItemOutput{Item: nil}, nil
-	}
-
-	// Default UpdateItem: no-op (tests override when needed)
-	m.updateFn = func(ctx context.Context, params *dynamodb.UpdateItemInput) (*dynamodb.UpdateItemOutput, error) {
-		return &dynamodb.UpdateItemOutput{}, nil
-	}
-
-	// Default Query: return all items matching the account (simplified)
-	m.queryFn = func(ctx context.Context, params *dynamodb.QueryInput) (*dynamodb.QueryOutput, error) {
-		var items []map[string]types.AttributeValue
-		accountID := ""
-		if v, ok := params.ExpressionAttributeValues[":accountId"]; ok {
-			if s, ok := v.(*types.AttributeValueMemberS); ok {
-				accountID = s.Value
-			}
-		}
-		for _, item := range m.items {
-			if acctAttr, ok := item["researcherAccountId"]; ok {
-				if s, ok := acctAttr.(*types.AttributeValueMemberS); ok {
-					if s.Value == accountID {
-						items = append(items, item)
-					}
-				}
-			}
-		}
-		return &dynamodb.QueryOutput{Items: items}, nil
-	}
-
-	// Default Scan: return all items
-	m.scanFn = func(ctx context.Context, params *dynamodb.ScanInput) (*dynamodb.ScanOutput, error) {
-		var items []map[string]types.AttributeValue
-		for _, item := range m.items {
-			items = append(items, item)
-		}
-		return &dynamodb.ScanOutput{Items: items}, nil
-	}
-
-	return m
-}
-
-func (m *mockDynamoDBClient) PutItem(ctx context.Context, params *dynamodb.PutItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.PutItemOutput, error) {
-	return m.putItemFn(ctx, params)
-}
-
-func (m *mockDynamoDBClient) GetItem(ctx context.Context, params *dynamodb.GetItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.GetItemOutput, error) {
-	return m.getItemFn(ctx, params)
-}
-
-func (m *mockDynamoDBClient) UpdateItem(ctx context.Context, params *dynamodb.UpdateItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.UpdateItemOutput, error) {
-	return m.updateFn(ctx, params)
-}
-
-func (m *mockDynamoDBClient) Query(ctx context.Context, params *dynamodb.QueryInput, optFns ...func(*dynamodb.Options)) (*dynamodb.QueryOutput, error) {
-	return m.queryFn(ctx, params)
-}
-
-func (m *mockDynamoDBClient) Scan(ctx context.Context, params *dynamodb.ScanInput, optFns ...func(*dynamodb.Options)) (*dynamodb.ScanOutput, error) {
-	return m.scanFn(ctx, params)
-}
-
-func (m *mockDynamoDBClient) DescribeTable(ctx context.Context, params *dynamodb.DescribeTableInput, optFns ...func(*dynamodb.Options)) (*dynamodb.DescribeTableOutput, error) {
-	return &dynamodb.DescribeTableOutput{}, nil
-}
-
 func TestCreate_Success(t *testing.T) {
-	mock := newMockDynamoDBClient()
+	mock := awstest.NewDynamoDB()
 	store := NewShareStore(mock, "ShareRecords")
 
 	expiry := time.Now().UTC().Add(7 * 24 * time.Hour)
@@ -161,13 +63,13 @@ func TestCreate_Success(t *testing.T) {
 	}
 
 	// Verify it was stored in DynamoDB
-	if len(mock.items) != 1 {
-		t.Errorf("expected 1 item stored, got %d", len(mock.items))
+	if len(mock.Items) != 1 {
+		t.Errorf("expected 1 item stored, got %d", len(mock.Items))
 	}
 }
 
 func TestCreate_Unlimited(t *testing.T) {
-	mock := newMockDynamoDBClient()
+	mock := awstest.NewDynamoDB()
 	store := NewShareStore(mock, "ShareRecords")
 
 	input := CreateInput{
@@ -189,8 +91,8 @@ func TestCreate_Unlimited(t *testing.T) {
 }
 
 func TestCreate_DynamoDBError(t *testing.T) {
-	mock := newMockDynamoDBClient()
-	mock.putItemFn = func(ctx context.Context, params *dynamodb.PutItemInput) (*dynamodb.PutItemOutput, error) {
+	mock := awstest.NewDynamoDB()
+	mock.PutItemFn = func(ctx context.Context, params *dynamodb.PutItemInput) (*dynamodb.PutItemOutput, error) {
 		return nil, fmt.Errorf("dynamodb unavailable")
 	}
 	store := NewShareStore(mock, "ShareRecords")
@@ -209,7 +111,7 @@ func TestCreate_DynamoDBError(t *testing.T) {
 }
 
 func TestGet_Success(t *testing.T) {
-	mock := newMockDynamoDBClient()
+	mock := awstest.NewDynamoDB()
 	store := NewShareStore(mock, "ShareRecords")
 
 	// Create a record first
@@ -240,7 +142,7 @@ func TestGet_Success(t *testing.T) {
 }
 
 func TestGet_NotFound(t *testing.T) {
-	mock := newMockDynamoDBClient()
+	mock := awstest.NewDynamoDB()
 	store := NewShareStore(mock, "ShareRecords")
 
 	_, err := store.Get(context.Background(), "nonexistent-id")
@@ -250,7 +152,7 @@ func TestGet_NotFound(t *testing.T) {
 }
 
 func TestRevoke_Success(t *testing.T) {
-	mock := newMockDynamoDBClient()
+	mock := awstest.NewDynamoDB()
 	store := NewShareStore(mock, "ShareRecords")
 
 	// Create an active share
@@ -283,7 +185,7 @@ func TestRevoke_Success(t *testing.T) {
 }
 
 func TestRevoke_NotFound(t *testing.T) {
-	mock := newMockDynamoDBClient()
+	mock := awstest.NewDynamoDB()
 	store := NewShareStore(mock, "ShareRecords")
 
 	_, err := store.Revoke(context.Background(), "nonexistent-id")
@@ -293,7 +195,7 @@ func TestRevoke_NotFound(t *testing.T) {
 }
 
 func TestRevoke_AlreadyRevoked(t *testing.T) {
-	mock := newMockDynamoDBClient()
+	mock := awstest.NewDynamoDB()
 	store := NewShareStore(mock, "ShareRecords")
 
 	// Create and then revoke a share
@@ -317,7 +219,7 @@ func TestRevoke_AlreadyRevoked(t *testing.T) {
 
 	// Mock the GetItem to return the revoked record
 	revokedAt := time.Now().UTC().Format(time.RFC3339)
-	mock.items[created.ShareID]["revokedAt"] = &types.AttributeValueMemberS{Value: revokedAt}
+	mock.Items[created.ShareID]["revokedAt"] = &types.AttributeValueMemberS{Value: revokedAt}
 
 	// Try to revoke again
 	_, err = store.Revoke(context.Background(), created.ShareID)
@@ -327,7 +229,7 @@ func TestRevoke_AlreadyRevoked(t *testing.T) {
 }
 
 func TestRevoke_Expired(t *testing.T) {
-	mock := newMockDynamoDBClient()
+	mock := awstest.NewDynamoDB()
 	store := NewShareStore(mock, "ShareRecords")
 
 	// Create a share with an expiry in the past
@@ -352,7 +254,7 @@ func TestRevoke_Expired(t *testing.T) {
 }
 
 func TestExtend_Success(t *testing.T) {
-	mock := newMockDynamoDBClient()
+	mock := awstest.NewDynamoDB()
 	store := NewShareStore(mock, "ShareRecords")
 
 	// Create an active share with future expiry
@@ -389,7 +291,7 @@ func TestExtend_Success(t *testing.T) {
 }
 
 func TestExtend_NotFound(t *testing.T) {
-	mock := newMockDynamoDBClient()
+	mock := awstest.NewDynamoDB()
 	store := NewShareStore(mock, "ShareRecords")
 
 	_, err := store.Extend(context.Background(), "nonexistent-id", 7*24*time.Hour)
@@ -399,7 +301,7 @@ func TestExtend_NotFound(t *testing.T) {
 }
 
 func TestExtend_AlreadyRevoked(t *testing.T) {
-	mock := newMockDynamoDBClient()
+	mock := awstest.NewDynamoDB()
 	store := NewShareStore(mock, "ShareRecords")
 
 	// Create and revoke
@@ -417,7 +319,7 @@ func TestExtend_AlreadyRevoked(t *testing.T) {
 
 	// Simulate revoked state
 	revokedAt := time.Now().UTC().Format(time.RFC3339)
-	mock.items[created.ShareID]["revokedAt"] = &types.AttributeValueMemberS{Value: revokedAt}
+	mock.Items[created.ShareID]["revokedAt"] = &types.AttributeValueMemberS{Value: revokedAt}
 
 	_, err = store.Extend(context.Background(), created.ShareID, 7*24*time.Hour)
 	if err != ErrShareAlreadyRevoked {
@@ -426,7 +328,7 @@ func TestExtend_AlreadyRevoked(t *testing.T) {
 }
 
 func TestExtend_Expired(t *testing.T) {
-	mock := newMockDynamoDBClient()
+	mock := awstest.NewDynamoDB()
 	store := NewShareStore(mock, "ShareRecords")
 
 	// Create with past expiry
@@ -451,7 +353,7 @@ func TestExtend_Expired(t *testing.T) {
 }
 
 func TestListByAccount_Success(t *testing.T) {
-	mock := newMockDynamoDBClient()
+	mock := awstest.NewDynamoDB()
 	store := NewShareStore(mock, "ShareRecords")
 
 	// Create two shares for the same account
@@ -488,7 +390,7 @@ func TestListByAccount_Success(t *testing.T) {
 }
 
 func TestListByAccount_NoResults(t *testing.T) {
-	mock := newMockDynamoDBClient()
+	mock := awstest.NewDynamoDB()
 	store := NewShareStore(mock, "ShareRecords")
 
 	records, err := store.ListByAccount(context.Background(), "nonexistent-account")
@@ -502,19 +404,19 @@ func TestListByAccount_NoResults(t *testing.T) {
 }
 
 func TestListAll_Success(t *testing.T) {
-	mock := newMockDynamoDBClient()
+	mock := awstest.NewDynamoDB()
 	store := NewShareStore(mock, "ShareRecords")
 
 	// Create shares for different accounts
 	input1 := CreateInput{
-		ResearcherAccountID: "account1",
-		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:account1:vpc/vpc-1",
+		ResearcherAccountID: "111111111111",
+		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:111111111111:vpc/vpc-0000000000000001",
 		LibraryIDs:          []string{"L001"},
 		S3Prefixes:          []string{"s3://bucket/p1/"},
 	}
 	input2 := CreateInput{
-		ResearcherAccountID: "account2",
-		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:account2:vpc/vpc-2",
+		ResearcherAccountID: "222222222222",
+		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:222222222222:vpc/vpc-0000000000000002",
 		LibraryIDs:          []string{"L002"},
 		S3Prefixes:          []string{"s3://bucket/p2/"},
 	}
@@ -548,7 +450,7 @@ func TestListAll_Success(t *testing.T) {
 }
 
 func TestListAll_Empty(t *testing.T) {
-	mock := newMockDynamoDBClient()
+	mock := awstest.NewDynamoDB()
 	store := NewShareStore(mock, "ShareRecords")
 
 	records, err := store.ListAll(context.Background())
@@ -639,7 +541,7 @@ func TestMarshalUnmarshal_RoundTrip_WithRevokedAt(t *testing.T) {
 }
 
 func TestRevoke_AlreadyRevoked_StateUnchanged(t *testing.T) {
-	mock := newMockDynamoDBClient()
+	mock := awstest.NewDynamoDB()
 	store := NewShareStore(mock, "ShareRecords")
 
 	// Create and revoke a share
@@ -657,11 +559,11 @@ func TestRevoke_AlreadyRevoked_StateUnchanged(t *testing.T) {
 
 	// Simulate revoked state in DynamoDB
 	revokedAt := time.Now().UTC().Format(time.RFC3339)
-	mock.items[created.ShareID]["revokedAt"] = &types.AttributeValueMemberS{Value: revokedAt}
+	mock.Items[created.ShareID]["revokedAt"] = &types.AttributeValueMemberS{Value: revokedAt}
 
 	// Track whether UpdateItem is called
 	updateCalled := false
-	mock.updateFn = func(ctx context.Context, params *dynamodb.UpdateItemInput) (*dynamodb.UpdateItemOutput, error) {
+	mock.UpdateItemFn = func(ctx context.Context, params *dynamodb.UpdateItemInput) (*dynamodb.UpdateItemOutput, error) {
 		updateCalled = true
 		return &dynamodb.UpdateItemOutput{}, nil
 	}
@@ -678,7 +580,7 @@ func TestRevoke_AlreadyRevoked_StateUnchanged(t *testing.T) {
 }
 
 func TestRevoke_Expired_StateUnchanged(t *testing.T) {
-	mock := newMockDynamoDBClient()
+	mock := awstest.NewDynamoDB()
 	store := NewShareStore(mock, "ShareRecords")
 
 	// Create a share with past expiry
@@ -698,7 +600,7 @@ func TestRevoke_Expired_StateUnchanged(t *testing.T) {
 
 	// Track whether UpdateItem is called
 	updateCalled := false
-	mock.updateFn = func(ctx context.Context, params *dynamodb.UpdateItemInput) (*dynamodb.UpdateItemOutput, error) {
+	mock.UpdateItemFn = func(ctx context.Context, params *dynamodb.UpdateItemInput) (*dynamodb.UpdateItemOutput, error) {
 		updateCalled = true
 		return &dynamodb.UpdateItemOutput{}, nil
 	}
@@ -715,7 +617,7 @@ func TestRevoke_Expired_StateUnchanged(t *testing.T) {
 }
 
 func TestExtend_Revoked_StateUnchanged(t *testing.T) {
-	mock := newMockDynamoDBClient()
+	mock := awstest.NewDynamoDB()
 	store := NewShareStore(mock, "ShareRecords")
 
 	// Create and simulate revoked state
@@ -732,11 +634,11 @@ func TestExtend_Revoked_StateUnchanged(t *testing.T) {
 	}
 
 	revokedAt := time.Now().UTC().Format(time.RFC3339)
-	mock.items[created.ShareID]["revokedAt"] = &types.AttributeValueMemberS{Value: revokedAt}
+	mock.Items[created.ShareID]["revokedAt"] = &types.AttributeValueMemberS{Value: revokedAt}
 
 	// Track whether UpdateItem is called
 	updateCalled := false
-	mock.updateFn = func(ctx context.Context, params *dynamodb.UpdateItemInput) (*dynamodb.UpdateItemOutput, error) {
+	mock.UpdateItemFn = func(ctx context.Context, params *dynamodb.UpdateItemInput) (*dynamodb.UpdateItemOutput, error) {
 		updateCalled = true
 		return &dynamodb.UpdateItemOutput{}, nil
 	}
@@ -753,7 +655,7 @@ func TestExtend_Revoked_StateUnchanged(t *testing.T) {
 }
 
 func TestExtend_Expired_StateUnchanged(t *testing.T) {
-	mock := newMockDynamoDBClient()
+	mock := awstest.NewDynamoDB()
 	store := NewShareStore(mock, "ShareRecords")
 
 	// Create with past expiry
@@ -773,7 +675,7 @@ func TestExtend_Expired_StateUnchanged(t *testing.T) {
 
 	// Track whether UpdateItem is called
 	updateCalled := false
-	mock.updateFn = func(ctx context.Context, params *dynamodb.UpdateItemInput) (*dynamodb.UpdateItemOutput, error) {
+	mock.UpdateItemFn = func(ctx context.Context, params *dynamodb.UpdateItemInput) (*dynamodb.UpdateItemOutput, error) {
 		updateCalled = true
 		return &dynamodb.UpdateItemOutput{}, nil
 	}
@@ -805,7 +707,7 @@ func TestGenerateULID(t *testing.T) {
 }
 
 func TestFindMatchingActiveShare_ExactMatch(t *testing.T) {
-	mock := newMockDynamoDBClient()
+	mock := awstest.NewDynamoDB()
 	store := NewShareStore(mock, "ShareRecords")
 
 	// Create an active share
@@ -836,7 +738,7 @@ func TestFindMatchingActiveShare_ExactMatch(t *testing.T) {
 }
 
 func TestFindMatchingActiveShare_NoMatch_DifferentLibraries(t *testing.T) {
-	mock := newMockDynamoDBClient()
+	mock := awstest.NewDynamoDB()
 	store := NewShareStore(mock, "ShareRecords")
 
 	// Create an active share
@@ -864,7 +766,7 @@ func TestFindMatchingActiveShare_NoMatch_DifferentLibraries(t *testing.T) {
 }
 
 func TestFindMatchingActiveShare_SkipsRevoked(t *testing.T) {
-	mock := newMockDynamoDBClient()
+	mock := awstest.NewDynamoDB()
 	store := NewShareStore(mock, "ShareRecords")
 
 	// Create a share and then revoke it
@@ -882,7 +784,7 @@ func TestFindMatchingActiveShare_SkipsRevoked(t *testing.T) {
 
 	// Mark as revoked in mock
 	revokedAt := time.Now().UTC().Format(time.RFC3339)
-	mock.items[created.ShareID]["revokedAt"] = &types.AttributeValueMemberS{Value: revokedAt}
+	mock.Items[created.ShareID]["revokedAt"] = &types.AttributeValueMemberS{Value: revokedAt}
 
 	// Search should not find the revoked share
 	match, err := store.FindMatchingActiveShare(context.Background(), "534840902377", []string{"L2400001"})
@@ -896,7 +798,7 @@ func TestFindMatchingActiveShare_SkipsRevoked(t *testing.T) {
 }
 
 func TestFindMatchingActiveShare_SkipsExpired(t *testing.T) {
-	mock := newMockDynamoDBClient()
+	mock := awstest.NewDynamoDB()
 	store := NewShareStore(mock, "ShareRecords")
 
 	// Create a share with past expiry
@@ -926,7 +828,7 @@ func TestFindMatchingActiveShare_SkipsExpired(t *testing.T) {
 }
 
 func TestFindMatchingActiveShare_NoShares(t *testing.T) {
-	mock := newMockDynamoDBClient()
+	mock := awstest.NewDynamoDB()
 	store := NewShareStore(mock, "ShareRecords")
 
 	match, err := store.FindMatchingActiveShare(context.Background(), "534840902377", []string{"L2400001"})
@@ -940,7 +842,7 @@ func TestFindMatchingActiveShare_NoShares(t *testing.T) {
 }
 
 func TestCreateIdempotent_NewShare(t *testing.T) {
-	mock := newMockDynamoDBClient()
+	mock := awstest.NewDynamoDB()
 	store := NewShareStore(mock, "ShareRecords")
 
 	input := CreateInput{
@@ -967,7 +869,7 @@ func TestCreateIdempotent_NewShare(t *testing.T) {
 }
 
 func TestCreateIdempotent_ExistingMatch(t *testing.T) {
-	mock := newMockDynamoDBClient()
+	mock := awstest.NewDynamoDB()
 	store := NewShareStore(mock, "ShareRecords")
 
 	input := CreateInput{
@@ -1005,7 +907,7 @@ func TestCreateIdempotent_ExistingMatch(t *testing.T) {
 }
 
 func TestCreateIdempotent_PartialOverlap_CreatesNew(t *testing.T) {
-	mock := newMockDynamoDBClient()
+	mock := awstest.NewDynamoDB()
 	store := NewShareStore(mock, "ShareRecords")
 
 	// Create a share with L1, L2

@@ -8,20 +8,6 @@ import (
 	"github.com/umccr/data-releaser/internal/config"
 )
 
-// shareRecordsTable returns the DynamoDB table name for Share_Records, used by all
-// subcommands that interact with the authorization store.
-//
-// The Infrastructure_Stack creates the table as "<namePrefix>-ShareRecords", so this
-// cannot be a bare constant: a stack deployed under a non-default name prefix would
-// not be found. It comes from config, falling back to the name the stack produces
-// under its default prefix.
-func shareRecordsTable() string {
-	if cfg := GetConfig(); cfg != nil && cfg.Authorization.ShareRecordsTable != "" {
-		return cfg.Authorization.ShareRecordsTable
-	}
-	return config.DefaultShareRecordsTable
-}
-
 var (
 	cfgFile string
 	profile string
@@ -35,6 +21,11 @@ var rootCmd = &cobra.Command{
 bioinformatics data (identified by library_id) with external researchers
 via the htsget-rs protocol. It manages authorization, VPC Lattice connectivity,
 and manifest delivery across multiple AWS accounts.`,
+	// Execute renders the error itself, once. Without these, cobra also prints it and
+	// appends a full usage dump, so an operational failure (bad credentials, missing
+	// table) was reported two or three times and buried under flag documentation.
+	SilenceErrors: true,
+	SilenceUsage:  true,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := config.Load(cfgFile)
 		if err != nil {
@@ -69,4 +60,11 @@ func init() {
 // Must be called after PersistentPreRunE has executed.
 func GetConfig() *config.Config {
 	return appCfg
+}
+
+// warnf reports a non-fatal problem on the command's error stream. It is for work that
+// failed after the primary mutation already succeeded, where the command must still
+// report success — writing through the command keeps the output capturable in tests.
+func warnf(cmd *cobra.Command, format string, args ...any) {
+	fmt.Fprintf(cmd.ErrOrStderr(), "Warning: "+format+"\n", args...)
 }

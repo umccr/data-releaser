@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -12,8 +11,8 @@ import (
 
 	"github.com/umccr/data-releaser/internal/auth"
 	internalaws "github.com/umccr/data-releaser/internal/aws"
+	"github.com/umccr/data-releaser/internal/config"
 	"github.com/umccr/data-releaser/internal/manifest"
-	"github.com/umccr/data-releaser/internal/model"
 )
 
 var extendCmd = &cobra.Command{
@@ -61,21 +60,18 @@ func runExtend(cmd *cobra.Command, args []string) error {
 
 	factory, err := internalaws.NewClientFactory(ctx, cfg.Profile, "")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return err
 	}
 
 	// --- Step 3: Get the share first to check if it's unlimited (Req 9.5) ---
-	store := auth.NewShareStore(factory.DynamoDBClient(), shareRecordsTable())
+	store := auth.NewShareStore(factory.DynamoDBClient(), cfg.Authorization.ShareRecordsTable)
 
 	existing, err := store.Get(ctx, shareID)
 	if err != nil {
 		if errors.Is(err, auth.ErrShareNotFound) {
-			fmt.Fprintf(os.Stderr, "Error: share %q not found\n", shareID)
-			return err
+			return fmt.Errorf("share %q not found", shareID)
 		}
-		fmt.Fprintf(os.Stderr, "Error: failed to retrieve share: %v\n", err)
-		return err
+		return fmt.Errorf("failed to retrieve share: %w", err)
 	}
 
 	// Check if unlimited: if ExpiresAt is nil, report and exit (Req 9.5)
@@ -87,64 +83,23 @@ func runExtend(cmd *cobra.Command, args []string) error {
 	// --- Step 4: Extend the share (Req 9.1) ---
 	updated, err := store.Extend(ctx, shareID, duration)
 	if err != nil {
-		if errors.Is(err, auth.ErrShareNotFound) {
-			fmt.Fprintf(os.Stderr, "Error: share %q not found\n", shareID)
-		} else if errors.Is(err, auth.ErrShareAlreadyRevoked) {
-			fmt.Fprintf(os.Stderr, "Error: share %q has been revoked and cannot be extended\n", shareID)
-		} else if errors.Is(err, auth.ErrShareExpired) {
-			fmt.Fprintf(os.Stderr, "Error: share %q has already expired and cannot be extended\n", shareID)
-		} else {
-			fmt.Fprintf(os.Stderr, "Error: failed to extend share: %v\n", err)
+		switch {
+		case errors.Is(err, auth.ErrShareNotFound):
+			return fmt.Errorf("share %q not found", shareID)
+		case errors.Is(err, auth.ErrShareAlreadyRevoked):
+			return fmt.Errorf("share %q has been revoked and cannot be extended", shareID)
+		case errors.Is(err, auth.ErrShareExpired):
+			return fmt.Errorf("share %q has already expired and cannot be extended", shareID)
+		default:
+			return fmt.Errorf("failed to extend share: %w", err)
 		}
-		return err
 	}
 
 	// --- Step 5: Regenerate manifest for the affected researcher account (Req 9.3) ---
-	allShares, err := store.ListByAccount(ctx, updated.ResearcherAccountID)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: share extended but manifest regeneration failed: %v\n", err)
-		fmt.Printf("Share extended successfully:\n")
-		fmt.Printf("  Share ID:   %s\n", updated.ShareID)
-		fmt.Printf("  New Expiry: %s\n", updated.ExpiresAt.Format(time.RFC3339))
-		return fmt.Errorf("manifest regeneration failed (share %s was extended): %w", updated.ShareID, err)
-	}
-
-	now := time.Now().UTC()
-	var activeShares []model.ShareRecord
-	for _, s := range allShares {
-		if s.EffectiveStatus(now) == model.ShareStatusActive {
-			activeShares = append(activeShares, *s)
-		}
-	}
-
-	generator := manifest.NewGenerator(cfg.Endpoints.HtsgetBaseURL)
-	manifestDoc := generator.Generate(activeShares, now)
-
-	manifestBucket := strings.TrimSpace(cfg.Manifest.Bucket)
-	if manifestBucket == "" {
-		fmt.Fprintf(os.Stderr, "Warning: share extended but manifest.bucket is not configured; manifest not updated\n")
-		fmt.Printf("Share extended successfully:\n")
-		fmt.Printf("  Share ID:   %s\n", updated.ShareID)
-		fmt.Printf("  New Expiry: %s\n", updated.ExpiresAt.Format(time.RFC3339))
-		return fmt.Errorf("manifest.bucket not configured (share %s was extended)", updated.ShareID)
-	}
-	manifestKey, err := cfg.Manifest.RenderManifestKey(updated.ResearcherAccountID)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: share extended but manifest key could not be resolved: %v\n", err)
-		fmt.Printf("Share extended successfully:\n")
-		fmt.Printf("  Share ID:   %s\n", updated.ShareID)
-		fmt.Printf("  New Expiry: %s\n", updated.ExpiresAt.Format(time.RFC3339))
-		return fmt.Errorf("manifest key resolution failed (share %s was extended): %w", updated.ShareID, err)
-	}
-
-	writer := manifest.NewWriter(factory.S3Client())
-	if err := writer.Sync(ctx, manifestBucket, manifestKey, manifestDoc); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: share extended but manifest upload failed: %v\n", err)
-		fmt.Printf("Share extended successfully:\n")
-		fmt.Printf("  Share ID:   %s\n", updated.ShareID)
-		fmt.Printf("  New Expiry: %s\n", updated.ExpiresAt.Format(time.RFC3339))
-		return fmt.Errorf("manifest upload failed (share %s was extended): %w", updated.ShareID, err)
-	}
+	// The extension is already durable, so the confirmation is printed either way; a
+	// manifest failure is still returned as an error, because the researcher's manifest
+	// now understates their access and the operator needs to retry.
+	manifestErr := extendManifest(ctx, cfg, factory, store, updated.ResearcherAccountID)
 
 	// --- Step 6: Output confirmation (Req 9.3) ---
 	fmt.Printf("Share extended successfully:\n")
@@ -153,5 +108,18 @@ func runExtend(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  Libraries:  %d (%s)\n", len(updated.LibraryIDs), strings.Join(updated.LibraryIDs, ", "))
 	fmt.Printf("  New Expiry: %s\n", updated.ExpiresAt.Format(time.RFC3339))
 
+	if manifestErr != nil {
+		return fmt.Errorf("manifest regeneration failed (share %s was extended): %w", updated.ShareID, manifestErr)
+	}
+
 	return nil
+}
+
+// extendManifest republishes the researcher's manifest after an extension.
+func extendManifest(ctx context.Context, cfg *config.Config, factory *internalaws.ClientFactory, store *auth.ShareStore, accountID string) error {
+	target, err := resolveManifestTarget(cfg, accountID)
+	if err != nil {
+		return err
+	}
+	return regenerateManifest(ctx, cfg, manifest.NewWriter(factory.S3Client()), store, accountID, target)
 }

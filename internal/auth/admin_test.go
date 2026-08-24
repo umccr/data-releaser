@@ -8,10 +8,12 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+
+	"github.com/umccr/data-releaser/internal/awstest"
 )
 
-func setupAdminHandler() (*AdminHandler, *mockDynamoDBClient) {
-	mock := newMockDynamoDBClient()
+func setupAdminHandler() (*AdminHandler, *awstest.DynamoDB) {
+	mock := awstest.NewDynamoDB()
 	store := NewShareStore(mock, "ShareRecords")
 	handler := NewAdminHandler(store)
 	return handler, mock
@@ -141,6 +143,41 @@ func TestHandleCreate_InvalidExpiry(t *testing.T) {
 	}
 }
 
+// TestHandleCreate_InvalidTargetVpcArn covers the admin API rejecting a target VPC ARN
+// that could never match an authorization callout. Before ShareStore.Create validated
+// this, the Lambda write path persisted such a share happily and the mistake only
+// surfaced later as an unexplained deny.
+func TestHandleCreate_InvalidTargetVpcArn(t *testing.T) {
+	for name, arn := range map[string]string{
+		"not an arn":          "arn",
+		"lattice association": "arn:aws:vpc-lattice:ap-southeast-2:534840902377:servicenetworkserviceassociation/*",
+		"other account":       "arn:aws:ec2:ap-southeast-2:999999999999:vpc/vpc-0000000000000001",
+	} {
+		t.Run(name, func(t *testing.T) {
+			handler, mock := setupAdminHandler()
+			_, errResp, status := handler.HandleCreate(context.Background(), CreateRequest{
+				ResearcherAccountID: "534840902377",
+				TargetVpcArn:        arn,
+				LibraryIDs:          []string{"L2400001"},
+				S3Prefixes:          []string{"demo/L2400001/"},
+			})
+			if errResp == nil {
+				t.Fatal("expected an error response")
+			}
+			// A rejected ARN is caller error, not a store failure.
+			if status != http.StatusBadRequest {
+				t.Errorf("expected %d, got %d", http.StatusBadRequest, status)
+			}
+			if errResp.Code != ErrCodeInvalidInput {
+				t.Errorf("expected code %q, got %q", ErrCodeInvalidInput, errResp.Code)
+			}
+			if len(mock.Items) != 0 {
+				t.Errorf("expected no share to be persisted, got %d", len(mock.Items))
+			}
+		})
+	}
+}
+
 func TestHandleRevoke_Success(t *testing.T) {
 	handler, _ := setupAdminHandler()
 	createReq := CreateRequest{
@@ -191,7 +228,7 @@ func TestHandleRevoke_AlreadyRevoked(t *testing.T) {
 	}
 	createResp, _, _ := handler.HandleCreate(context.Background(), createReq)
 	revokedAt := time.Now().UTC().Format(time.RFC3339)
-	mock.items[createResp.ShareID]["revokedAt"] = &types.AttributeValueMemberS{Value: revokedAt}
+	mock.Items[createResp.ShareID]["revokedAt"] = &types.AttributeValueMemberS{Value: revokedAt}
 	req := RevokeRequest{ShareID: createResp.ShareID}
 	_, errResp, status := handler.HandleRevoke(context.Background(), req)
 	if errResp == nil {
@@ -290,7 +327,7 @@ func TestHandleExtend_Revoked(t *testing.T) {
 	}
 	createResp, _, _ := handler.HandleCreate(context.Background(), createReq)
 	revokedAt := time.Now().UTC().Format(time.RFC3339)
-	mock.items[createResp.ShareID]["revokedAt"] = &types.AttributeValueMemberS{Value: revokedAt}
+	mock.Items[createResp.ShareID]["revokedAt"] = &types.AttributeValueMemberS{Value: revokedAt}
 	req := ExtendRequest{ShareID: createResp.ShareID, Duration: "168h"}
 	_, errResp, status := handler.HandleExtend(context.Background(), req)
 	if errResp == nil {
@@ -347,14 +384,14 @@ func TestHandleExtend_EmptyShareID(t *testing.T) {
 func TestHandleList_All(t *testing.T) {
 	handler, _ := setupAdminHandler()
 	handler.HandleCreate(context.Background(), CreateRequest{
-		ResearcherAccountID: "account1",
-		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:account1:vpc/vpc-1",
+		ResearcherAccountID: "111111111111",
+		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:111111111111:vpc/vpc-0000000000000001",
 		LibraryIDs:          []string{"L001"},
 		S3Prefixes:          []string{"s3://bucket/p1/"},
 	})
 	handler.HandleCreate(context.Background(), CreateRequest{
-		ResearcherAccountID: "account2",
-		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:account2:vpc/vpc-2",
+		ResearcherAccountID: "222222222222",
+		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:222222222222:vpc/vpc-0000000000000002",
 		LibraryIDs:          []string{"L002"},
 		S3Prefixes:          []string{"s3://bucket/p2/"},
 	})
@@ -373,18 +410,18 @@ func TestHandleList_All(t *testing.T) {
 func TestHandleList_ByAccount(t *testing.T) {
 	handler, _ := setupAdminHandler()
 	handler.HandleCreate(context.Background(), CreateRequest{
-		ResearcherAccountID: "account1",
-		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:account1:vpc/vpc-1",
+		ResearcherAccountID: "111111111111",
+		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:111111111111:vpc/vpc-0000000000000001",
 		LibraryIDs:          []string{"L001"},
 		S3Prefixes:          []string{"s3://bucket/p1/"},
 	})
 	handler.HandleCreate(context.Background(), CreateRequest{
-		ResearcherAccountID: "account2",
-		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:account2:vpc/vpc-2",
+		ResearcherAccountID: "222222222222",
+		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:222222222222:vpc/vpc-0000000000000002",
 		LibraryIDs:          []string{"L002"},
 		S3Prefixes:          []string{"s3://bucket/p2/"},
 	})
-	resp, errResp, status := handler.HandleList(context.Background(), ListRequest{ResearcherAccountID: "account1"})
+	resp, errResp, status := handler.HandleList(context.Background(), ListRequest{ResearcherAccountID: "111111111111"})
 	if errResp != nil {
 		t.Fatalf("unexpected error: %+v", errResp)
 	}
@@ -419,7 +456,7 @@ func TestHandleList_IncludesStatus(t *testing.T) {
 		S3Prefixes:          []string{"s3://bucket/prefix1/"},
 	})
 	revokedAt := time.Now().UTC().Format(time.RFC3339)
-	mock.items[createResp.ShareID]["revokedAt"] = &types.AttributeValueMemberS{Value: revokedAt}
+	mock.Items[createResp.ShareID]["revokedAt"] = &types.AttributeValueMemberS{Value: revokedAt}
 	resp, _, _ := handler.HandleList(context.Background(), ListRequest{})
 	if len(resp.Shares) != 1 {
 		t.Fatalf("expected 1 share, got %d", len(resp.Shares))

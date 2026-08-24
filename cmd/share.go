@@ -3,7 +3,6 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -20,6 +19,10 @@ import (
 	"github.com/umccr/data-releaser/internal/warehouse"
 )
 
+// dayPattern matches a whole-day duration such as "30d", the shorthand Go's own
+// duration parser does not accept.
+var dayPattern = regexp.MustCompile(`^(\d+)d$`)
+
 // parseDuration parses a duration string that supports day suffixes (e.g. "30d", "7d")
 // as well as standard Go duration strings (e.g. "24h", "720h").
 // Returns the parsed duration or an error if the format is invalid.
@@ -28,8 +31,6 @@ func parseDuration(s string) (time.Duration, error) {
 		return 0, fmt.Errorf("empty duration string")
 	}
 
-	// Check for day suffix pattern (e.g. "30d", "7d")
-	dayPattern := regexp.MustCompile(`^(\d+)d$`)
 	if matches := dayPattern.FindStringSubmatch(s); matches != nil {
 		days, err := strconv.Atoi(matches[1])
 		if err != nil {
@@ -58,7 +59,7 @@ func resolveTargetVpcArn(cfg *config.Config, flagValue, accountID string) (strin
 	if flagValue == "" {
 		return cfg.ResolveTargetVpcArn(accountID)
 	}
-	if err := config.ValidateTargetVpcArn(flagValue, accountID); err != nil {
+	if err := model.ValidateTargetVpcArn(flagValue, accountID); err != nil {
 		return "", fmt.Errorf("--target-vpc-arn: %w", err)
 	}
 	return flagValue, nil
@@ -155,20 +156,17 @@ func runShare(cmd *cobra.Command, args []string) error {
 	// failing here avoids a partially-completed share whose authorization can never match.
 	targetVpcArn, err := resolveTargetVpcArn(cfg, targetVpcArnFlag, account)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return err
 	}
 
 	factory, err := internalaws.NewClientFactory(ctx, cfg.Profile, "")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return err
 	}
 
 	// --- Step 3: Run preflight - verify VPC Lattice/RAM connectivity (Req 5.4) ---
 	checker := lattice.NewChecker(factory.RAMClient())
 	if err := lattice.Preflight(ctx, checker, account); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return err
 	}
 
@@ -177,36 +175,24 @@ func runShare(cmd *cobra.Command, args []string) error {
 	// This removes the window where a share is persisted and only then fails on the
 	// manifest upload.
 	writer := manifest.NewWriter(factory.S3Client())
-	manifestBucket := strings.TrimSpace(cfg.Manifest.Bucket)
-	if manifestBucket == "" {
-		cfgErr := fmt.Errorf("manifest.bucket is not configured; the Manifest_Bucket name must be sourced from the Infrastructure_Stack output")
-		fmt.Fprintf(os.Stderr, "Error: %v\n", cfgErr)
-		return cfgErr
-	}
-	// Resolve the per-account manifest key (also validates the key template).
-	manifestKey, err := cfg.Manifest.RenderManifestKey(account)
+	target, err := resolveManifestTarget(cfg, account)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return err
 	}
-	if err := writer.VerifyBucketWritable(ctx, manifestBucket); err != nil {
-		wrapped := fmt.Errorf("manifest bucket %q is missing or not writable by the Data Control identity; "+
-			"the Infrastructure_Stack is not deployed or is misconfigured: %w", manifestBucket, err)
-		fmt.Fprintf(os.Stderr, "Error: %v\n", wrapped)
-		return wrapped
+	if err := writer.VerifyBucketWritable(ctx, target.bucket); err != nil {
+		return fmt.Errorf("manifest bucket %q is missing or not writable by the Data Control identity; "+
+			"the Infrastructure_Stack is not deployed or is misconfigured: %w", target.bucket, err)
 	}
 
 	// --- Step 4: Resolve libraries via Athena (Req 1.3) ---
 	whClient := warehouse.NewClient(factory.AthenaClient(), cfg.Warehouse)
 	resolved, err := whClient.ResolveLibraries(ctx, cleanLibraries)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: failed to resolve libraries: %v\n", err)
-		return err
+		return fmt.Errorf("failed to resolve libraries: %w", err)
 	}
 
 	// --- Step 5: Validate resolution (Req 1.6, 1.7) ---
 	if err := warehouse.ValidateResolution(cleanLibraries, resolved); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return err
 	}
 
@@ -230,32 +216,11 @@ func runShare(cmd *cobra.Command, args []string) error {
 
 	record, reused, err := store.CreateIdempotent(ctx, createInput)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: failed to create share record: %v\n", err)
-		return err
+		return fmt.Errorf("failed to create share record: %w", err)
 	}
 
-	// --- Step 8: Generate manifest (Req 7.1) ---
-	// Query all active shares for this researcher to build a complete manifest
-	allShares, err := store.ListByAccount(ctx, account)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: failed to list shares for manifest generation: %v\n", err)
-		return err
-	}
-
-	now := time.Now().UTC()
-	var activeShares []model.ShareRecord
-	for _, s := range allShares {
-		if s.EffectiveStatus(now) == model.ShareStatusActive {
-			activeShares = append(activeShares, *s)
-		}
-	}
-
-	generator := manifest.NewGenerator(cfg.Endpoints.HtsgetBaseURL)
-	manifestDoc := generator.Generate(activeShares, now)
-
-	// --- Step 9: Upload manifest (Req 7.2) ---
-	if err := writer.Sync(ctx, manifestBucket, manifestKey, manifestDoc); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: share record created but manifest upload failed: %v\n", err)
+	// --- Step 8/9: Regenerate and upload the researcher's manifest (Req 7.1, 7.2) ---
+	if err := regenerateManifest(ctx, cfg, writer, store, account, target); err != nil {
 		return fmt.Errorf("manifest upload failed (share %s was created): %w", record.ShareID, err)
 	}
 

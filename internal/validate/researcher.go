@@ -3,23 +3,18 @@ package validate
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awsarn "github.com/aws/aws-sdk-go-v2/aws/arn"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/micahhausler/aws-iam-policy/policy"
 
 	internalaws "github.com/umccr/data-releaser/internal/aws"
 	latticepkg "github.com/umccr/data-releaser/internal/lattice"
 )
-
-// researcherLambdaResponse represents the expected response structure from the Test_Lambda
-// during researcher-side validation.
-type researcherLambdaResponse struct {
-	StatusCode      int             `json:"statusCode"`
-	LatticeResponse json.RawMessage `json:"latticeResponse"`
-}
 
 // ValidateResearcherOpts holds the dependencies for researcher-side validation.
 type ValidateResearcherOpts struct {
@@ -47,67 +42,116 @@ func ValidateResearcher(ctx context.Context, opts ValidateResearcherOpts) []Chec
 // checkRAMAssociation verifies that the VPC Lattice service network association
 // to the target researcher account is present and in an active/associated state.
 func checkRAMAssociation(ctx context.Context, ramClient internalaws.RAMClient, accountID string) Check {
-	check := Check{Name: "VPC Lattice / RAM Association"}
-	checker := latticepkg.NewChecker(ramClient)
-	if err := checker.VerifyAssociation(ctx, accountID); err != nil {
-		check.Passed = false
-		check.Error = err.Error()
-		return check
+	const name = "VPC Lattice / RAM Association"
+	if err := latticepkg.NewChecker(ramClient).VerifyAssociation(ctx, accountID); err != nil {
+		return fail(name, "%s", err)
 	}
-	check.Passed = true
-	return check
+	return pass(name)
 }
 
-// bucketPolicyDocument is a minimal representation of an S3 bucket policy for grant checking.
-type bucketPolicyDocument struct {
-	Statement []bucketPolicyStatement `json:"Statement"`
-}
-
-// bucketPolicyStatement is a single statement in a bucket policy. Principal, Action,
-// and Resource may each be a string or a list, so they are decoded flexibly.
-type bucketPolicyStatement struct {
-	Effect    string          `json:"Effect"`
-	Principal json.RawMessage `json:"Principal"`
-	Action    json.RawMessage `json:"Action"`
-	Resource  json.RawMessage `json:"Resource"`
-}
-
-// coerceStringList decodes a JSON value that may be a string or an array of strings.
-func coerceStringList(raw json.RawMessage) []string {
-	if len(raw) == 0 {
-		return nil
+// awsPrincipals returns the AWS-account principals a statement grants to, and whether
+// the statement grants to everyone.
+//
+// The policy library reports a bare-string Principal (both `"*"` and
+// `"arn:aws:iam::...:root"`, which AWS accepts as shorthand) with kind "All", so the two
+// have to be told apart by value rather than by kind.
+func awsPrincipals(p *policy.Principal) (principals []string, all bool) {
+	if p == nil {
+		return nil, false
 	}
-	var single string
-	if err := json.Unmarshal(raw, &single); err == nil {
-		return []string{single}
-	}
-	var list []string
-	if err := json.Unmarshal(raw, &list); err == nil {
-		return list
-	}
-	return nil
-}
-
-// coercePrincipalStrings extracts all principal identifiers from a Principal value,
-// which may be "*", a string, an array, or an object like {"AWS": [...]}.
-func coercePrincipalStrings(raw json.RawMessage) []string {
-	if len(raw) == 0 {
-		return nil
-	}
-	// Try string or []string first.
-	if vals := coerceStringList(raw); vals != nil {
-		return vals
-	}
-	// Try object form: {"AWS": "..."} or {"AWS": [...]}.
-	var obj map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &obj); err == nil {
-		var out []string
-		for _, v := range obj {
-			out = append(out, coerceStringList(v)...)
+	if slices.Contains(p.Kinds(), policy.PrincipalKindAll) {
+		// MarshalJSON round-trips the original string form, quoted.
+		raw, err := p.MarshalJSON()
+		if err != nil {
+			return nil, false
 		}
-		return out
+		var s string
+		if err := json.Unmarshal(raw, &s); err != nil {
+			return nil, false
+		}
+		if s == policy.PrincipalAll {
+			return nil, true
+		}
+		return []string{s}, false
 	}
-	return nil
+	if awsPrincipal := p.AWS(); awsPrincipal != nil {
+		return awsPrincipal.Values(), false
+	}
+	return nil, false
+}
+
+// principalMatchesAccount reports whether any of a statement's principals identifies
+// accountID.
+//
+// A principal is either the bare account ID or an ARN whose account field is that ID --
+// matched on the parsed account field, not by substring, so an unrelated ARN that merely
+// contains the digits somewhere (a role path, say) does not count as a grant.
+func principalMatchesAccount(p *policy.Principal, accountID string) bool {
+	principals, all := awsPrincipals(p)
+	if all {
+		return true
+	}
+	for _, candidate := range principals {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == accountID {
+			return true
+		}
+		if parsed, err := awsarn.Parse(candidate); err == nil && parsed.AccountID == accountID {
+			return true
+		}
+	}
+	return false
+}
+
+// actionGrantsGetObject reports whether an action list covers s3:GetObject, accepting the
+// action itself or a wildcard that subsumes it.
+func actionGrantsGetObject(actions *policy.StringOrSlice) bool {
+	if actions == nil {
+		return false
+	}
+	for _, a := range actions.Values() {
+		switch strings.ToLower(strings.TrimSpace(a)) {
+		case "s3:getobject", "s3:*", "*":
+			return true
+		}
+	}
+	return false
+}
+
+// resourceCoversPrefix reports whether a resource list grants access to every object
+// under the account's own manifest prefix in bucket.
+//
+// Each resource is an S3 object ARN, optionally ending in a `*` wildcard. Matching is
+// done on the parsed ARN's resource path ("<bucket>/<key>") rather than by substring, so
+// a grant on a different bucket, or on a sibling account's prefix, is not mistaken for
+// this account's. A bare "*" resource covers everything.
+func resourceCoversPrefix(resources *policy.StringOrSlice, bucket, prefixPath string) bool {
+	if resources == nil {
+		return false
+	}
+	want := bucket + "/" + prefixPath
+	for _, r := range resources.Values() {
+		r = strings.TrimSpace(r)
+		if r == "*" {
+			return true
+		}
+		parsed, err := awsarn.Parse(r)
+		if err != nil || parsed.Service != "s3" {
+			continue
+		}
+		// A trailing "*" grants everything below the path it follows; anything else must
+		// name the prefix exactly.
+		if pattern, ok := strings.CutSuffix(parsed.Resource, "*"); ok {
+			if strings.HasPrefix(want, pattern) {
+				return true
+			}
+			continue
+		}
+		if parsed.Resource == want {
+			return true
+		}
+	}
+	return false
 }
 
 // checkManifestBucketPolicy verifies the Manifest_Bucket's cross-account bucket policy
@@ -115,198 +159,122 @@ func coercePrincipalStrings(raw json.RawMessage) []string {
 // prefix. If the grant is absent, it reports that the onboarding step which adds the
 // cross-account read grant to the Manifest_Bucket policy is incomplete (Req 15.9).
 func checkManifestBucketPolicy(ctx context.Context, s3Client internalaws.S3Client, bucket, prefix, accountID string) Check {
-	check := Check{Name: "Manifest_Bucket Cross-Account Read Grant"}
+	const name = "Manifest_Bucket Cross-Account Read Grant"
 
 	if s3Client == nil {
-		check.Passed = false
-		check.Error = "S3 client not configured"
-		return check
+		return fail(name, "S3 client not configured")
 	}
 	if bucket == "" {
-		check.Passed = false
-		check.Error = "manifest.bucket not configured; cannot verify the researcher's cross-account read grant"
-		return check
+		return fail(name, "manifest.bucket not configured; cannot verify the researcher's cross-account read grant")
 	}
 
 	out, err := s3Client.GetBucketPolicy(ctx, &s3.GetBucketPolicyInput{
 		Bucket: aws.String(bucket),
 	})
 	if err != nil {
-		check.Passed = false
-		check.Error = fmt.Sprintf("could not read the Manifest_Bucket %q policy; the researcher's cross-account read grant may be missing "+
+		return fail(name, "could not read the Manifest_Bucket %q policy; the researcher's cross-account read grant may be missing "+
 			"and the onboarding step which adds it to the Manifest_Bucket policy is incomplete: %v", bucket, err)
-		return check
 	}
 	if out.Policy == nil || *out.Policy == "" {
-		check.Passed = false
-		check.Error = fmt.Sprintf("the Manifest_Bucket %q has no bucket policy; the researcher's cross-account read grant is missing "+
+		return fail(name, "the Manifest_Bucket %q has no bucket policy; the researcher's cross-account read grant is missing "+
 			"and the onboarding step which adds it to the Manifest_Bucket policy is incomplete", bucket)
-		return check
 	}
 
-	var doc bucketPolicyDocument
+	var doc policy.Policy
 	if err := json.Unmarshal([]byte(*out.Policy), &doc); err != nil {
-		check.Passed = false
-		check.Error = fmt.Sprintf("the Manifest_Bucket %q policy is not valid JSON: %v", bucket, err)
-		return check
+		return fail(name, "the Manifest_Bucket %q policy is not valid JSON: %v", bucket, err)
+	}
+	if doc.Statements == nil {
+		return fail(name, "the Manifest_Bucket %q policy has no statements; the researcher's cross-account read grant is missing "+
+			"and the onboarding step which adds it to the Manifest_Bucket policy is incomplete", bucket)
 	}
 
 	// Derive the prefix path segment used to scope the grant (e.g. "manifests/<accountId>/").
 	prefixPath := strings.TrimSuffix(prefix, "*")
 
-	for _, st := range doc.Statement {
-		if !strings.EqualFold(st.Effect, "Allow") {
+	// This looks for a grant; it is not a full policy evaluation. In particular an
+	// explicit Deny elsewhere in the policy would override the Allow found here, so a
+	// pass means "the onboarding grant is present", not "the researcher can definitely
+	// read". Deny statements are skipped rather than interpreted.
+	for _, st := range doc.Statements.Values() {
+		if !strings.EqualFold(st.Effect, policy.EffectAllow) {
 			continue
 		}
-
-		// Principal must reference the researcher account.
-		principalMatch := false
-		for _, p := range coercePrincipalStrings(st.Principal) {
-			if strings.Contains(p, accountID) {
-				principalMatch = true
-				break
-			}
-		}
-		if !principalMatch {
+		if !principalMatchesAccount(st.Principal, accountID) {
 			continue
 		}
-
-		// Action must grant s3:GetObject (or a wildcard covering it).
-		actionMatch := false
-		for _, a := range coerceStringList(st.Action) {
-			la := strings.ToLower(a)
-			if la == "s3:getobject" || la == "s3:*" || la == "*" {
-				actionMatch = true
-				break
-			}
-		}
-		if !actionMatch {
+		if !actionGrantsGetObject(st.Action) {
 			continue
 		}
-
-		// Resource must be scoped to the account's own manifest prefix.
-		resourceMatch := false
-		for _, r := range coerceStringList(st.Resource) {
-			if strings.Contains(r, bucket) && (prefixPath == "" || strings.Contains(r, prefixPath) || strings.Contains(r, accountID)) {
-				resourceMatch = true
-				break
-			}
-		}
-		if !resourceMatch {
+		if !resourceCoversPrefix(st.Resource, bucket, prefixPath) {
 			continue
 		}
-
-		check.Passed = true
-		return check
+		return pass(name)
 	}
 
-	check.Passed = false
-	check.Error = fmt.Sprintf("the Manifest_Bucket %q policy does not grant account %s read (s3:GetObject) on its prefix %q; "+
+	return fail(name, "the Manifest_Bucket %q policy does not grant account %s read (s3:GetObject) on its prefix %q; "+
 		"the researcher's cross-account read grant is missing and the onboarding step which adds it to the Manifest_Bucket policy is incomplete",
 		bucket, accountID, prefix)
-	return check
 }
 
-// researcherCheckTestLambda discovers and invokes the Test_Lambda in the researcher account.
+// researcherCheckTestLambda discovers and invokes the Test_Lambda in the researcher
+// account. Discovery always yields a check; invocation only runs if a function was
+// found, since the Test_Lambda is optional.
 func researcherCheckTestLambda(ctx context.Context, lambdaClient internalaws.LambdaClient) []Check {
-	var checks []Check
+	const (
+		discoveryName  = "Test_Lambda Discovery"
+		invocationName = "Test_Lambda Invocation"
+	)
 
-	discoveryCheck := Check{Name: "Test_Lambda Discovery"}
-	functionName, err := researcherDiscoverTestLambda(ctx, lambdaClient)
-	if err != nil {
-		discoveryCheck.Passed = false
-		discoveryCheck.Error = fmt.Sprintf("failed to list Lambda functions: %v", err)
-		checks = append(checks, discoveryCheck)
-		return checks
+	functionName, err := discoverTestLambda(ctx, lambdaClient)
+	switch {
+	case err != nil:
+		return []Check{fail(discoveryName, "failed to list Lambda functions: %v", err)}
+	case functionName == "":
+		// Absence is reported as an unavailable-but-passing check: the Test_Lambda is
+		// optional, so not deploying it must not fail validation.
+		return []Check{{
+			Name:   discoveryName,
+			Passed: true,
+			Error: "UNAVAILABLE: Test_Lambda not found in target account; " +
+				"deploy it via the consumer construct's deployTestLambda option for end-to-end validation",
+		}}
 	}
 
-	if functionName == "" {
-		discoveryCheck.Passed = true
-		discoveryCheck.Error = "UNAVAILABLE: Test_Lambda not found in target account; " +
-			"deploy it via the consumer construct's deployTestLambda option for end-to-end validation"
-		checks = append(checks, discoveryCheck)
-		return checks
-	}
+	return []Check{pass(discoveryName), invokeResearcherTestLambda(ctx, lambdaClient, functionName, invocationName)}
+}
 
-	discoveryCheck.Passed = true
-	checks = append(checks, discoveryCheck)
-
-	invocationCheck := Check{Name: "Test_Lambda Invocation"}
+// invokeResearcherTestLambda invokes the discovered Test_Lambda and reports whether it
+// fetched the canary data end to end.
+func invokeResearcherTestLambda(ctx context.Context, lambdaClient internalaws.LambdaClient, functionName, name string) Check {
 	invokeOutput, err := lambdaClient.Invoke(ctx, &lambda.InvokeInput{
 		FunctionName: &functionName,
 	})
 	if err != nil {
-		invocationCheck.Passed = false
-		invocationCheck.Error = fmt.Sprintf("failed to invoke Test_Lambda %q: %v", functionName, err)
-		checks = append(checks, invocationCheck)
-		return checks
+		return fail(name, "failed to invoke Test_Lambda %q: %v", functionName, err)
 	}
 
 	if invokeOutput.FunctionError != nil && *invokeOutput.FunctionError != "" {
-		invocationCheck.Passed = false
-		invocationCheck.Error = fmt.Sprintf("Test_Lambda returned function error: %s", *invokeOutput.FunctionError)
 		if invokeOutput.Payload != nil {
-			invocationCheck.Error += fmt.Sprintf(" (payload: %s)", string(invokeOutput.Payload))
+			return fail(name, "Test_Lambda returned function error: %s (payload: %s)",
+				*invokeOutput.FunctionError, string(invokeOutput.Payload))
 		}
-		checks = append(checks, invocationCheck)
-		return checks
+		return fail(name, "Test_Lambda returned function error: %s", *invokeOutput.FunctionError)
 	}
 
 	if invokeOutput.Payload == nil {
-		invocationCheck.Passed = false
-		invocationCheck.Error = "Test_Lambda returned nil payload"
-		checks = append(checks, invocationCheck)
-		return checks
+		return fail(name, "Test_Lambda returned nil payload")
 	}
 
-	var resp researcherLambdaResponse
+	var resp testLambdaResponse
 	if err := json.Unmarshal(invokeOutput.Payload, &resp); err != nil {
-		invocationCheck.Passed = false
-		invocationCheck.Error = fmt.Sprintf("Test_Lambda response is not valid JSON: %v (payload: %s)",
+		return fail(name, "Test_Lambda response is not valid JSON: %v (payload: %s)",
 			err, string(invokeOutput.Payload))
-		checks = append(checks, invocationCheck)
-		return checks
 	}
 
-	if resp.StatusCode != 200 {
-		invocationCheck.Passed = false
-		invocationCheck.Error = fmt.Sprintf("Test_Lambda returned statusCode %d (expected 200)", resp.StatusCode)
-		checks = append(checks, invocationCheck)
-		return checks
+	if ok, reason := validateTestLambdaResponse(resp); !ok {
+		return fail(name, "%s", reason)
 	}
 
-	if resp.LatticeResponse == nil || len(resp.LatticeResponse) == 0 || string(resp.LatticeResponse) == "null" {
-		invocationCheck.Passed = false
-		invocationCheck.Error = "Test_Lambda returned statusCode 200 but latticeResponse is missing or empty"
-		checks = append(checks, invocationCheck)
-		return checks
-	}
-
-	invocationCheck.Passed = true
-	checks = append(checks, invocationCheck)
-	return checks
-}
-
-// researcherDiscoverTestLambda searches for a Lambda function with "TestLambda" in its name.
-func researcherDiscoverTestLambda(ctx context.Context, lambdaClient internalaws.LambdaClient) (string, error) {
-	var marker *string
-	for {
-		input := &lambda.ListFunctionsInput{
-			Marker: marker,
-		}
-		output, err := lambdaClient.ListFunctions(ctx, input)
-		if err != nil {
-			return "", err
-		}
-		for _, fn := range output.Functions {
-			if fn.FunctionName != nil && strings.Contains(*fn.FunctionName, "TestLambda") {
-				return *fn.FunctionName, nil
-			}
-		}
-		if output.NextMarker == nil || *output.NextMarker == "" {
-			break
-		}
-		marker = output.NextMarker
-	}
-	return "", nil
+	return pass(name)
 }

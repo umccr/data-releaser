@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -13,7 +12,6 @@ import (
 	"github.com/umccr/data-releaser/internal/auth"
 	internalaws "github.com/umccr/data-releaser/internal/aws"
 	"github.com/umccr/data-releaser/internal/manifest"
-	"github.com/umccr/data-releaser/internal/model"
 )
 
 var revokeCmd = &cobra.Command{
@@ -44,59 +42,34 @@ func runRevoke(cmd *cobra.Command, args []string) error {
 
 	factory, err := internalaws.NewClientFactory(ctx, cfg.Profile, "")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return err
 	}
 
 	// --- Step 2: Revoke the share via auth service (Req 3.1) ---
-	store := auth.NewShareStore(factory.DynamoDBClient(), shareRecordsTable())
+	store := auth.NewShareStore(factory.DynamoDBClient(), cfg.Authorization.ShareRecordsTable)
 
 	record, err := store.Revoke(ctx, shareID)
 	if err != nil {
 		// Handle specific state-conflict errors (Req 3.3, 3.5, 3.6, 3.7)
 		switch {
 		case errors.Is(err, auth.ErrShareNotFound):
-			fmt.Fprintf(os.Stderr, "Error: share %q not found\n", shareID)
+			return fmt.Errorf("share %q not found", shareID)
 		case errors.Is(err, auth.ErrShareAlreadyRevoked):
-			fmt.Fprintf(os.Stderr, "Error: share %q is already revoked\n", shareID)
+			return fmt.Errorf("share %q is already revoked", shareID)
 		case errors.Is(err, auth.ErrShareExpired):
-			fmt.Fprintf(os.Stderr, "Error: share %q has already expired\n", shareID)
+			return fmt.Errorf("share %q has already expired", shareID)
 		default:
-			fmt.Fprintf(os.Stderr, "Error: failed to revoke share: %v\n", err)
+			return fmt.Errorf("failed to revoke share: %w", err)
 		}
-		return err
 	}
 
 	// --- Step 3: Regenerate manifest (Req 7.3, 7.4) ---
-	allShares, err := store.ListByAccount(ctx, record.ResearcherAccountID)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to list shares for manifest regeneration: %v\n", err)
-		// Don't fail the revoke command — the record was already revoked
-	} else {
-		now := time.Now().UTC()
-		var activeShares []model.ShareRecord
-		for _, s := range allShares {
-			if s.EffectiveStatus(now) == model.ShareStatusActive {
-				activeShares = append(activeShares, *s)
-			}
-		}
-
-		generator := manifest.NewGenerator(cfg.Endpoints.HtsgetBaseURL)
-		manifestDoc := generator.Generate(activeShares, now)
-
-		manifestBucket := strings.TrimSpace(cfg.Manifest.Bucket)
-		manifestKey, keyErr := cfg.Manifest.RenderManifestKey(record.ResearcherAccountID)
-		switch {
-		case manifestBucket == "":
-			fmt.Fprintf(os.Stderr, "Warning: manifest.bucket is not configured; skipping manifest regeneration (revocation still applied)\n")
-		case keyErr != nil:
-			fmt.Fprintf(os.Stderr, "Warning: could not resolve manifest key (revocation still applied): %v\n", keyErr)
-		default:
-			writer := manifest.NewWriter(factory.S3Client())
-			if syncErr := writer.Sync(ctx, manifestBucket, manifestKey, manifestDoc); syncErr != nil {
-				fmt.Fprintf(os.Stderr, "Warning: manifest sync failed (revocation still applied): %v\n", syncErr)
-			}
-		}
+	// A manifest failure is reported but does not fail the command: the revocation is
+	// already durable, and re-running revoke would only report a conflict.
+	if target, targetErr := resolveManifestTarget(cfg, record.ResearcherAccountID); targetErr != nil {
+		warnf(cmd, "manifest not regenerated (revocation still applied): %v", targetErr)
+	} else if syncErr := regenerateManifest(ctx, cfg, manifest.NewWriter(factory.S3Client()), store, record.ResearcherAccountID, target); syncErr != nil {
+		warnf(cmd, "manifest regeneration failed (revocation still applied): %v", syncErr)
 	}
 
 	// --- Step 4: Output confirmation (Req 3.4) ---

@@ -77,14 +77,20 @@ func LibraryIDs(t *rapid.T) []string {
 	).Draw(t, "libraryIds")
 }
 
-// S3Prefixes generates 0..3 unique S3 prefixes. Zero prefixes is a deliberate
-// edge case (a Share_Record with an empty s3Prefixes set).
+// S3Prefixes generates 0..3 unique S3 prefixes in the form the production path
+// actually produces. Zero prefixes is a deliberate edge case (a Share_Record with an
+// empty s3Prefixes set).
+//
+// The prefixes are bucket-less key prefixes with a trailing slash, e.g.
+// "demo/L2400001/", matching warehouse.DerivePrefix. The bucket is deliberately absent:
+// a prefix is matched with starts_with against the htsget id, which is also bucket-less,
+// because the bucket belongs to the htsget-rs deployment's own location config rather
+// than to the share. Generating an "s3://bucket/key/" form here would exercise the
+// properties against values authorization can never match.
 func S3Prefixes(t *rapid.T) []string {
 	return rapid.SliceOfNDistinct(
 		rapid.Custom(func(t *rapid.T) string {
-			bucket := rapid.StringMatching(`[a-z0-9-]{3,12}`).Draw(t, "bucket")
-			prefix := rapid.StringMatching(`[a-z0-9/-]{1,12}`).Draw(t, "prefix")
-			return fmt.Sprintf("s3://%s/%s/", bucket, prefix)
+			return rapid.StringMatching(`[a-z0-9]{1,8}(/[a-z0-9]{1,8}){0,2}`).Draw(t, "keyPrefix") + "/"
 		}),
 		0, 3,
 		func(s string) string { return s },

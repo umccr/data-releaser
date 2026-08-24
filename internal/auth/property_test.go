@@ -12,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"pgregory.net/rapid"
 
+	"github.com/umccr/data-releaser/internal/awstest"
 	"github.com/umccr/data-releaser/internal/model"
 	"github.com/umccr/data-releaser/internal/testgen"
 	"github.com/umccr/data-releaser/internal/warehouse"
@@ -93,14 +94,14 @@ func TestProperty1_FailClosed(t *testing.T) {
 
 		mode := rapid.SampledFrom([]string{"normal", "error", "malformed"}).Draw(t, "mode")
 
-		mock := newMockDynamoDBClient()
+		mock := awstest.NewDynamoDB()
 		switch mode {
 		case "error":
-			mock.queryFn = func(ctx context.Context, params *dynamodb.QueryInput) (*dynamodb.QueryOutput, error) {
+			mock.QueryFn = func(ctx context.Context, params *dynamodb.QueryInput) (*dynamodb.QueryOutput, error) {
 				return nil, fmt.Errorf("dynamodb unreachable")
 			}
 		case "malformed":
-			mock.queryFn = func(ctx context.Context, params *dynamodb.QueryInput) (*dynamodb.QueryOutput, error) {
+			mock.QueryFn = func(ctx context.Context, params *dynamodb.QueryInput) (*dynamodb.QueryOutput, error) {
 				return &dynamodb.QueryOutput{Items: []map[string]types.AttributeValue{
 					{
 						"shareId":             &types.AttributeValueMemberS{Value: "01MALFORMED0000000000000A"},
@@ -113,7 +114,7 @@ func TestProperty1_FailClosed(t *testing.T) {
 			}
 		default: // "normal"
 			items := marshalItems(t, records)
-			mock.queryFn = func(ctx context.Context, params *dynamodb.QueryInput) (*dynamodb.QueryOutput, error) {
+			mock.QueryFn = func(ctx context.Context, params *dynamodb.QueryInput) (*dynamodb.QueryOutput, error) {
 				return &dynamodb.QueryOutput{Items: items}, nil
 			}
 		}
@@ -194,8 +195,8 @@ func TestProperty2_PerResearcherIsolation(t *testing.T) {
 		all := append(append([]model.ShareRecord{}, recordsA...), recordsB...)
 		items := marshalItems(t, all)
 
-		mock := newMockDynamoDBClient()
-		mock.queryFn = func(ctx context.Context, params *dynamodb.QueryInput) (*dynamodb.QueryOutput, error) {
+		mock := awstest.NewDynamoDB()
+		mock.QueryFn = func(ctx context.Context, params *dynamodb.QueryInput) (*dynamodb.QueryOutput, error) {
 			var wantArn string
 			if v, ok := params.ExpressionAttributeValues[":vpcArn"]; ok {
 				if s, ok := v.(*types.AttributeValueMemberS); ok {
@@ -322,12 +323,12 @@ func TestProperty4_NoPartialShareEndToEnd(t *testing.T) {
 		// Build the resolution result, injecting missing and archived libraries.
 		resolved, anyProblem := buildResolution(t, requested)
 
-		mock := newMockDynamoDBClient()
+		mock := awstest.NewDynamoDB()
 		store := NewShareStore(mock, "ShareRecords")
 
 		rec, err := runSharePipeline(context.Background(), store, account, vpcArn, requested, resolved, preflightOK)
 
-		persisted := len(mock.items) > 0
+		persisted := len(mock.Items) > 0
 		shouldFail := !preflightOK || anyProblem
 
 		if shouldFail {
@@ -349,8 +350,8 @@ func TestProperty4_NoPartialShareEndToEnd(t *testing.T) {
 		if !persisted {
 			t.Fatalf("expected exactly one persisted share on success, got none")
 		}
-		if len(mock.items) != 1 {
-			t.Fatalf("expected exactly one persisted share on success, got %d", len(mock.items))
+		if len(mock.Items) != 1 {
+			t.Fatalf("expected exactly one persisted share on success, got %d", len(mock.Items))
 		}
 	})
 }
@@ -439,7 +440,7 @@ func TestProperty10_IdempotentCreation(t *testing.T) {
 			expiresAt = &fut
 		}
 
-		mock := newMockDynamoDBClient()
+		mock := awstest.NewDynamoDB()
 		store := NewShareStore(mock, "ShareRecords")
 
 		input := CreateInput{
@@ -457,8 +458,8 @@ func TestProperty10_IdempotentCreation(t *testing.T) {
 		if reused {
 			t.Fatalf("first create should not reuse an existing share")
 		}
-		if len(mock.items) != 1 {
-			t.Fatalf("expected exactly one share after first create, got %d", len(mock.items))
+		if len(mock.Items) != 1 {
+			t.Fatalf("expected exactly one share after first create, got %d", len(mock.Items))
 		}
 
 		// Second create with the same set but reversed order must be idempotent.
@@ -479,8 +480,8 @@ func TestProperty10_IdempotentCreation(t *testing.T) {
 		if second.ShareID != first.ShareID {
 			t.Fatalf("idempotent create returned different share ID: %q vs %q", first.ShareID, second.ShareID)
 		}
-		if len(mock.items) != 1 {
-			t.Fatalf("idempotent create must not add a duplicate active grant, got %d shares", len(mock.items))
+		if len(mock.Items) != 1 {
+			t.Fatalf("idempotent create must not add a duplicate active grant, got %d shares", len(mock.Items))
 		}
 	})
 }

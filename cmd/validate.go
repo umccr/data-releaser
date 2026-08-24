@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"os"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -60,7 +59,6 @@ func runValidate(cmd *cobra.Command, args []string) error {
 
 	factory, err := internalaws.NewClientFactory(ctx, cfg.Profile, "")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return err
 	}
 
@@ -75,7 +73,7 @@ func runValidate(cmd *cobra.Command, args []string) error {
 		APIGatewayClient:      factory.APIGatewayClient(),
 		HTTPClient:            httpClient,
 		Config:                cfg,
-		ShareRecordsTableName: shareRecordsTable(),
+		ShareRecordsTableName: cfg.Authorization.ShareRecordsTable,
 	}
 
 	checks := validate.ValidateProvider(ctx, opts)
@@ -127,11 +125,18 @@ func runValidate(cmd *cobra.Command, args []string) error {
 		fmt.Println("Canary test-setup mode:")
 		fmt.Println("───────────────────────")
 
-		store := auth.NewShareStore(factory.DynamoDBClient(), shareRecordsTable())
+		store := auth.NewShareStore(factory.DynamoDBClient(), cfg.Authorization.ShareRecordsTable)
 		canaryOpts := validate.CanaryOpts{
 			ShareStore:   store,
 			LambdaClient: factory.LambdaClient(),
 			Config:       cfg.Validation.Canary,
+		}
+		// The synthetic share is keyed on the canary account's configured VPC ARN, the
+		// same value a real share for that account would use. A resolution failure is
+		// left to RunCanaryTest to report as a failed check rather than aborting the
+		// command, so the other results still print.
+		if cfg.Validation.Canary != nil {
+			canaryOpts.TargetVpcArn, _ = cfg.ResolveTargetVpcArn(cfg.Validation.Canary.Account)
 		}
 		canaryCheck := validate.RunCanaryTest(ctx, canaryOpts)
 		checks = append(checks, canaryCheck)
