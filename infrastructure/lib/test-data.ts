@@ -11,10 +11,10 @@ export interface TestDataObject {
   /** Library ID the CLI is invoked with (`--libraries`) and the Mart row key. */
   readonly libraryId: string;
   /**
-   * S3 key of the BAM under the test bucket (no leading slash). The fetch script
-   * (scripts/fetch-test-data.sh) must place the htsget-rs sample file at exactly
-   * this path under infrastructure/test-data/, with its `.bam.bai` index beside
-   * it, so that BucketDeployment reproduces these keys verbatim.
+   * S3 key of the BAM under the test bucket (no leading slash). A vendored file
+   * must sit at exactly this path under infrastructure/test-data/, with its
+   * `.bam.bai` index beside it, so that BucketDeployment reproduces these keys
+   * verbatim. Synth fails fast when one is missing.
    */
   readonly key: string;
 }
@@ -25,9 +25,9 @@ export interface TestDataObject {
  * the co-located `.bam.bai` index is uploaded automatically because it shares
  * the key prefix, and htsget-rs needs it for range queries.
  *
- * This is the single source of truth: the fetch script lays these keys out on
- * disk, DataShareTestStack uploads them, and MockMartStack defaults its rows to
- * them so the mock warehouse and the bucket never drift apart.
+ * This is the single source of truth: the fixtures are vendored at these keys
+ * under test-data/, DataShareTestStack uploads them, and MockMartStack defaults
+ * its rows to them so the mock warehouse and the bucket never drift apart.
  */
 export const TEST_DATA_OBJECTS: TestDataObject[] = [
   { libraryId: "L2400001", key: "demo/L2400001/NA12878.bam" },

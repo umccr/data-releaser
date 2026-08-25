@@ -24,10 +24,24 @@ researcher-side resources, no Lake Formation / RAM sharing, no htsget-rs
 
 ## Parameters (Req 16.10)
 
-Everything that varies between environments is a **parameter**, supplied through
-**CDK context** — nothing is hardcoded, so one source tree deploys to a dev and a
-prod Data_Control_Account with no code change. Defaults live in `cdk.json` under
-the `dataReleaser` key; override per invocation with `-c key=value`.
+Everything that varies between environments is a **parameter**, so nothing is
+hardcoded and one source tree deploys to a dev and a prod Data_Control_Account
+with no code change. Every parameter lives under the `dataReleaser` key of
+[`cdk.context.json`](cdk.context.json); edit that file to retarget a deployment.
+No `-c` flags are read, and `cdk.json` carries only CDK feature flags.
+
+`cdk.context.json` rather than `cdk.json` or `-c` for two reasons. `-c` can only
+carry strings — `cdk`'s help calls it a "contextual *string* parameter", so
+`-c provisionOperatorPolicy=false` arrives as the string `"false"`, which is
+truthy; every boolean, number and list would need a coercion layer whose bugs
+silently deploy the opposite of what was asked. And `cdk.json` context takes
+precedence over `cdk.context.json` for the same key, so the block must live in
+exactly one of them or the wrong one silently wins.
+
+> ⚠️ `cdk context --clear` / `--reset` rewrite the whole file and **delete the
+> hand-authored `dataReleaser` block** along with the lookup cache. Restore it
+> with `git checkout cdk.context.json`, or remove just the `vpc-provider:` entry
+> by hand instead.
 
 | Context key               | Meaning                                                                                                               | Default                                     |
 |---------------------------|-----------------------------------------------------------------------------------------------------------------------|---------------------------------------------|
@@ -35,36 +49,60 @@ the `dataReleaser` key; override per invocation with `-c key=value`.
 | `region`                  | Target region                                                                                                         | `CDK_DEFAULT_REGION`, else `ap-southeast-2` |
 | `namePrefix`              | Physical-name prefix                                                                                                  | `data-releaser`                             |
 | `stageName`               | REST API stage name                                                                                                   | `prod`                                      |
-| `researcherAccountIds`    | Accounts granted manifest read (JSON array or comma list)                                                             | `[]`                                        |
+| `researcherAccountIds`    | Accounts granted manifest read (JSON array of account IDs)                                                             | `[]`                                        |
 | `cacheTtlCeiling`         | Cache_TTL ceiling (Go duration)                                                                                       | `1h`                                        |
 | `cacheDenyTtl`            | Negative-cache max-age (Go duration)                                                                                  | `60s`                                       |
 | `encryption`              | Manifest_Bucket SSE: `s3-managed` or `kms`                                                                            | `s3-managed`                                |
 | `provisionOperatorPolicy` | Provision the Req 11.2 operator policy                                                                                | `false`                                     |
 | `apiVpcId`                | VPC hosting the API's interface endpoint and every Lambda; must be the VPC the htsget-rs Lambda runs in. **Required** | `vpc-03e01fb6290012661`                     |
 
-Example — deploy to production Data Control:
+Example — deploy to production Data Control, granting two researcher accounts
+read on their own manifest prefix:
+
+```jsonc
+// cdk.context.json
+{
+  "dataReleaser": {
+    "account": "916218008751",
+    "region": "ap-southeast-2",
+    "apiVpcId": "vpc-03e01fb6290012661",
+    "researcherAccountIds": ["111111111111", "222222222222"]
+  }
+}
+```
 
 ```bash
 pnpm install
-pnpm run build:lambdas          # cross-compiles the Go Lambdas (see below)
-cdk deploy \
-  -c account=916218008751 -c region=ap-southeast-2 \
-  -c researcherAccountIds=111111111111,222222222222
+cdk deploy
 ```
 
 ## Go Lambda bundling
 
 Both Lambdas are **Go** binaries on the `provided.al2023` custom runtime, targeting
-**arm64/Graviton**. AWS custom runtimes require the executable to be named
-`bootstrap`. `scripts/build-lambdas.sh` (run via `pnpm run build:lambdas`)
-cross-compiles each entrypoint:
+**arm64/Graviton**. `GoFunction` from `@aws-cdk/aws-lambda-go-alpha` compiles them
+as part of `cdk synth`, so there is no separate build step and nothing to rebuild
+by hand. It emits the executable as `bootstrap`, which the custom runtime requires.
+
+Per function this is equivalent to:
 
 ```bash
-GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o dist/<fn>/bootstrap ./functions/<fn>
+GOOS=linux GOARCH=arm64 CGO_ENABLED=0 \
+  go build -trimpath -ldflags="-s -w" -o bootstrap ./functions/<fn>
 ```
 
-The stack references `dist/authorization/` and `dist/admin/` as `lambda.Code.fromAsset`
-targets. `dist/` is git-ignored and must be rebuilt before `cdk synth`/`cdk deploy`.
+`GOOS`, `GOARCH` (from the function's `architecture`), and `CGO_ENABLED=0` are the
+construct's own defaults; `-trimpath -ldflags "-s -w"` comes from
+`bundling.goBuildFlags`. `moduleDir` points at the repo-root `go.mod`, since the Go
+module spans the whole repo rather than `infrastructure/`.
+
+Bundling uses the local Go toolchain when one is on `PATH` and falls back to a
+Docker container otherwise, so Go **or** Docker is enough. The asset hash is
+derived from the compiled binary, so editing a Go source file invalidates the
+asset and triggers a rebuild on the next synth.
+
+> `@aws-cdk/aws-lambda-go-alpha` is an **alpha** CDK module: its API is outside
+> semver and may change or be removed in a future release. It is pinned to
+> `2.160.0-alpha.0`, matching `aws-cdk-lib`, and both must be bumped together.
 
 ## Optional: mock test-data bucket (`DataShareTestStack`)
 
@@ -75,20 +113,20 @@ stands one up: a locked-down, disposable bucket named
 that htsget-rs serves and the mock Mart advertises. Eventually it is the fixture
 an end-to-end integration test resolves against.
 
-It is **off by default** and deploys only when `-c dataShareTest=true` is set. The
-seed data is not vendored — fetch it first (git-ignored, like `dist/`):
+It is **off by default** and deploys only when `dataReleaser.dataShareTest` is
+`true` in `cdk.context.json`. The seed data is vendored, so there is no
+preparatory step:
 
 ```bash
-pnpm run fetch:test-data
-cdk deploy DataShareTestStack -c dataShareTest=true \
-  -c account=916218008751 -c region=ap-southeast-2
+cdk deploy DataShareTestStack
 ```
 
-`fetch:test-data` downloads `htsnexus_test_NA12878.bam` and its `.bai` index from
-`umccr/htsget-rs` into `test-data/`, laid out in the bucket's key structure
-(`demo/L2400001/NA12878.bam`). `cdk deploy` then uploads that tree verbatim. If
-the fixtures are missing, synth fails with a pointer back to the fetch script
-rather than deploying an empty bucket that 404s in htsget.
+`test-data/` holds the upstream `htsnexus_test_NA12878.bam` and its `.bai` index
+(2.5 MB, MIT, from `umccr/htsget-rs`), renamed and laid out in the bucket's key
+structure (`demo/L2400001/NA12878.bam`); `cdk deploy` uploads that tree verbatim. See
+[`test-data/README.md`](test-data/README.md) for provenance and checksums. Synth
+still fails fast if a `TEST_DATA_OBJECTS` key has no file behind it, rather than
+deploying a bucket that 404s in htsget.
 
 The bucket blocks all public access, enforces TLS, disables ACLs
 (`BUCKET_OWNER_ENFORCED`), and is destroyed with the stack (it holds only
@@ -104,14 +142,12 @@ derived `s3:GetObject` grant to this account.
 
 A second, **optional** stack stands in for the OrcaVault Mart so the CLI can be
 demoed or exercised end-to-end without warehouse access. It is not part of
-Req 16 and is **off by default**; it deploys only when `-c mockMart=true` is set,
-and only if you also name the stack:
+Req 16 and is **off by default**; it deploys only when
+`dataReleaser.mockMart` is `true` in `cdk.context.json`, and only if you also
+name the stack:
 
 ```bash
-pnpm run build
-cdk deploy MockMartStack -c mockMart=true \
-  -c account=916218008751 -c region=ap-southeast-2 \
-  -c mockMartObjects=L2400001=demo/L2400001/NA12878.bam
+cdk deploy MockMartStack
 ```
 
 It creates a disposable S3 bucket, a Glue database with a `bam` table whose
@@ -141,7 +177,7 @@ setting `warehouse.database`/`warehouse.athenaWorkgroup` to these names.
 | `mockMartWorkgroup`  | Athena workgroup → `warehouse.athenaWorkgroup`               | `data-releaser-mock`                 |
 | `mockMartDataBucket` | Bucket named in the rows' `bucket` column (not created here) | `data-share-test-<account>-<region>` |
 | `mockMartCohortId`   | Value of the `cohort_id` column                              | `DEMO`                               |
-| `mockMartObjects`    | Rows as `libraryId=key` pairs (JSON array or comma list)     | `L2400001=demo/L2400001/NA12878.bam` |
+| `mockMartObjects`    | Rows as `{ libraryId, key }` objects (JSON array)             | the `TEST_DATA_OBJECTS` fixtures     |
 
 The `mockMartDataBucket` default is the `DataShareTestStack` bucket, so the two
 stacks are meant to be deployed together: the rows then resolve to objects that
@@ -212,10 +248,9 @@ any bucket not blocking all public access. Making anything public again
 requires editing that aspect — a reviewable code change, not a context value.
 
 The VPC lookup is resolved against the real account **once** and cached in
-`cdk.context.json` (checked in), so `cdk synth
--c account=916218008751 -c region=ap-southeast-2` works with no credentials.
-Only a lookup for a new account/region/VPC needs credentials to populate the
-cache.
+`cdk.context.json` (checked in), beside the `dataReleaser` configuration block,
+so `cdk synth` works with no credentials. Only a lookup for a new
+account/region/VPC needs credentials to populate the cache.
 
 ## Stack outputs → CLI config (Req 16.4)
 
@@ -231,10 +266,9 @@ cache.
 
 ```bash
 pnpm install            # install CDK dependencies (respects the lockfile)
-pnpm run build:lambdas  # cross-compile the Go Lambdas into dist/
 pnpm run build          # tsc typecheck/compile
 pnpm test               # CDK assertion tests over the synthesised template
-pnpm exec cdk synth     # synthesise; works with no AWS credentials when
-                        # account/region match the cached lookup in
-                        # cdk.context.json (-c account=916218008751 -c region=ap-southeast-2)
+pnpm exec cdk synth     # synthesise; no flags, and no AWS credentials needed
+                        # when dataReleaser.account/region in cdk.context.json
+                        # match the VPC lookup cached in the same file
 ```

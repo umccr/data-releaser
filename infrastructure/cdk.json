@@ -1,7 +1,9 @@
 {
   "app": "node bin/data-releaser.js",
   "watch": {
-    "include": ["**"],
+    "include": [
+      "**"
+    ],
     "exclude": [
       "README.md",
       "cdk*.json",
@@ -17,28 +19,12 @@
   "context": {
     "@aws-cdk/aws-lambda:recognizeLayerVersion": true,
     "@aws-cdk/core:checkSecretUsage": true,
-    "@aws-cdk/core:target-partitions": ["aws", "aws-cn"],
+    "@aws-cdk/core:target-partitions": [
+      "aws",
+      "aws-cn"
+    ],
     "@aws-cdk/aws-iam:minimizePolicies": true,
     "@aws-cdk/core:validateSnapshotRemovalPolicy": true,
-    "@aws-cdk/aws-apigateway:disableCloudWatchRole": true,
-    "dataReleaser": {
-      "namePrefix": "data-releaser",
-      "stageName": "prod",
-      "researcherAccountIds": [],
-      "cacheTtlCeiling": "1h",
-      "cacheDenyTtl": "60s",
-      "encryption": "s3-managed",
-      "provisionOperatorPolicy": false,
-
-      "apiVpcId": "vpc-03e01fb6290012661",
-
-      "dataShareTest": false,
-
-      "mockMart": false,
-      "mockMartDatabase": "mart_mock",
-      "mockMartWorkgroup": "data-releaser-mock",
-      "mockMartCohortId": "DEMO",
-      "mockMartObjects": ["L2400001=demo/L2400001/NA12878.bam"]
-    }
+    "@aws-cdk/aws-apigateway:disableCloudWatchRole": true
   }
 }

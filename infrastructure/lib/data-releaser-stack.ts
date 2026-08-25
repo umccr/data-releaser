@@ -14,6 +14,7 @@ import {
   aws_iam as iam,
   aws_ec2 as ec2,
 } from "aws-cdk-lib";
+import * as goLambda from "@aws-cdk/aws-lambda-go-alpha";
 import { Construct } from "constructs";
 import { VpcOnlyAspect } from "./vpc-only-aspect";
 
@@ -201,12 +202,25 @@ export class DataReleaserStack extends Stack {
     // ---------------------------------------------------------------------
     // Lambda functions + tightly-scoped execution roles (Req 16.6, 16.7)
     // ---------------------------------------------------------------------
-    // Both functions are Go binaries built to a `bootstrap` executable for the
-    // provided.al2023 custom runtime on arm64/Graviton (see
-    // scripts/build-lambdas.sh, run via `pnpm run build:lambdas`). The asset
-    // directories under dist/ are produced by that script before synth/deploy.
-    const authAssetPath = path.join(__dirname, "..", "dist", "authorization");
-    const adminAssetPath = path.join(__dirname, "..", "dist", "admin");
+    // Both functions are Go binaries on the provided.al2023 custom runtime,
+    // arm64/Graviton. GoFunction compiles them during synth, so there is no
+    // separate build step to forget and no stale binary to deploy: the asset
+    // hash is derived from the compiled output.
+    //
+    // GoFunction supplies GOOS=linux, GOARCH from `architecture`, and
+    // CGO_ENABLED=0 (its default, which is what provided.al2023 needs for a
+    // static binary), and names the output `bootstrap` as the custom runtime
+    // requires. It builds with the local Go toolchain when one is present and
+    // falls back to Docker otherwise.
+    //
+    // moduleDir is the repo-root go.mod: the Go module spans the whole repo, so
+    // the build has to run from there rather than from infrastructure/.
+    const goModuleDir = path.join(__dirname, "..", "..", "go.mod");
+    const goBundling: goLambda.BundlingOptions = {
+      // Trim filesystem paths and drop the symbol/DWARF tables. Matches how the
+      // binaries were built before and keeps them reproducible across machines.
+      goBuildFlags: ['-trimpath -ldflags "-s -w"'],
+    };
 
     // Authorization callout role: read-only, and only the GSI1 index it queries
     // (Req 16.7). No table-wide access, no access to GSI2. The callout performs
@@ -231,12 +245,13 @@ export class DataReleaserStack extends Stack {
       }),
     );
 
-    const authFn = new lambda.Function(this, "AuthorizationFunction", {
+    const authFn = new goLambda.GoFunction(this, "AuthorizationFunction", {
       functionName: `${prefix}-authorization`,
       runtime: lambda.Runtime.PROVIDED_AL2023,
       architecture: lambda.Architecture.ARM_64,
-      handler: "bootstrap",
-      code: lambda.Code.fromAsset(authAssetPath),
+      entry: path.join(__dirname, "..", "..", "functions", "authorization"),
+      moduleDir: goModuleDir,
+      bundling: goBundling,
       role: authRole,
       memorySize: 128,
       timeout: Duration.seconds(10),
@@ -283,12 +298,13 @@ export class DataReleaserStack extends Stack {
       }),
     );
 
-    const adminFn = new lambda.Function(this, "AdminFunction", {
+    const adminFn = new goLambda.GoFunction(this, "AdminFunction", {
       functionName: `${prefix}-admin`,
       runtime: lambda.Runtime.PROVIDED_AL2023,
       architecture: lambda.Architecture.ARM_64,
-      handler: "bootstrap",
-      code: lambda.Code.fromAsset(adminAssetPath),
+      entry: path.join(__dirname, "..", "..", "functions", "admin"),
+      moduleDir: goModuleDir,
+      bundling: goBundling,
       role: adminRole,
       memorySize: 128,
       timeout: Duration.seconds(10),

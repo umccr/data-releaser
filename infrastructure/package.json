@@ -10,13 +10,12 @@
     "build": "tsc",
     "watch": "tsc -w",
     "test": "jest",
-    "build:lambdas": "bash scripts/build-lambdas.sh",
-    "fetch:test-data": "bash scripts/fetch-test-data.sh",
     "synth": "cdk synth",
     "cdk": "cdk"
   },
   "packageManager": "pnpm@11.21.0",
   "dependencies": {
+    "@aws-cdk/aws-lambda-go-alpha": "2.160.0-alpha.0",
     "aws-cdk-lib": "2.160.0",
     "constructs": "10.3.0"
   },

@@ -12,8 +12,8 @@ export interface DataShareTestStackProps extends StackProps {
    * Local directory whose tree is uploaded verbatim to the bucket. Its layout IS
    * the bucket's key layout, so a file at
    * `<sourcePath>/demo/L2400001/NA12878.bam` lands at
-   * `s3://<bucket>/demo/L2400001/NA12878.bam`. Populated from the htsget-rs test
-   * data repo by scripts/fetch-test-data.sh (run `pnpm run fetch:test-data`).
+   * `s3://<bucket>/demo/L2400001/NA12878.bam`. The htsget-rs sample fixtures are
+   * vendored under infrastructure/test-data/ (see its README for provenance).
    */
   readonly sourcePath: string;
 }
@@ -28,7 +28,7 @@ export interface DataShareTestStackProps extends StackProps {
  * Eventually it is the fixture an end-to-end integration test resolves against.
  *
  * The bucket holds only the public htsget-rs sample data — no genomic PHI — and
- * is entirely reproducible from the fetch script, so it is disposable: it and
+ * is entirely reproducible from the vendored fixtures, so it is disposable: it and
  * its contents are destroyed with the stack. It is emphatically NOT a production
  * data location.
  *
