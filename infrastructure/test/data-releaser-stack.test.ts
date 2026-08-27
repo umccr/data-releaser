@@ -27,7 +27,6 @@ function buildStack(opts: {
     researcherAccountIds: opts.researcherAccountIds,
     cacheTtlCeiling: "1h",
     cacheDenyTtl: "60s",
-    encryption: opts.encryption,
     provisionOperatorPolicy: opts.provisionOperatorPolicy,
     apiVpcId: "vpc-12345",
   });

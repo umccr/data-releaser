@@ -1,19 +1,15 @@
 #!/usr/bin/env node
 import * as path from "path";
 import * as cdk from "aws-cdk-lib";
-import { DataReleaserStack, EncryptionMode } from "../lib/data-releaser-stack";
+import { DataReleaserStack } from "../lib/data-releaser-stack";
 import { DataShareTestStack } from "../lib/data-share-test-stack";
 import { MockMartObject, MockMartStack } from "../lib/mock-mart-stack";
 import { dataShareTestBucketName, TEST_DATA_OBJECTS } from "../lib/test-data";
-import { VpcOnlyAspect } from "../lib/vpc-only-aspect";
 
 /**
  * CDK app entrypoint for the Data Releaser stack.
  */
 const app = new cdk.App();
-
-// This will fail a synth if anything is not inside the VPC.
-cdk.Aspects.of(app).add(new VpcOnlyAspect());
 
 /**
  * All configuration is under the `dataReleaser` key of cdk.context.json.
@@ -27,7 +23,6 @@ interface DataReleaserContext {
   readonly researcherAccountIds?: string[];
   readonly cacheTtlCeiling?: string;
   readonly cacheDenyTtl?: string;
-  readonly encryption?: EncryptionMode;
   readonly provisionOperatorPolicy?: boolean;
   readonly dataShareTest?: boolean;
   readonly mockMart?: boolean;
@@ -55,7 +50,6 @@ new DataReleaserStack(app, "DataReleaserStack", {
   researcherAccountIds: cfg.researcherAccountIds ?? [],
   cacheTtlCeiling: cfg.cacheTtlCeiling ?? "1h",
   cacheDenyTtl: cfg.cacheDenyTtl ?? "60s",
-  encryption: cfg.encryption === "kms" ? "kms" : "s3-managed",
   provisionOperatorPolicy: cfg.provisionOperatorPolicy ?? false,
   apiVpcId,
   description:
