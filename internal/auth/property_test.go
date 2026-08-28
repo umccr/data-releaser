@@ -80,12 +80,9 @@ func parseMaxAge(t *rapid.T, cacheControl string) int64 {
 	return secs
 }
 
-// TestProperty1_FailClosed validates Property 1 (fail-closed): no data is served
-// unless an active, non-expired, non-revoked Share_Record authorizes the request;
-// any error, malformed response, or absent record yields denial, never access.
-//
-// Validates: Requirements 4.5, 4.6, 13.10
-func TestProperty1_FailClosed(t *testing.T) {
+// no data is served unless an active, non-expired, non-revoked Share_Record authorizes
+// the request; any error, malformed response, or absent record yields denial, never access.
+func TestFailClosed(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		now := time.Now().UTC()
 		accountID := testgen.AccountID(t)
@@ -156,13 +153,10 @@ func TestProperty1_FailClosed(t *testing.T) {
 	})
 }
 
-// TestProperty2_PerResearcherIsolation validates Property 2: an authorization
-// decision is never shared across Researcher_Accounts. The callout keys on the
+// An authorization decision is never shared across Researcher_Accounts. The callout keys on the
 // requester identity (targetVpcArn / GSI1), so one researcher can never receive
 // another's locations.
-//
-// Validates: Requirements 13.3, 13.9
-func TestProperty2_PerResearcherIsolation(t *testing.T) {
+func TestPerResearcherIsolation(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		now := time.Now().UTC()
 		accountA, accountB := testgen.DistinctAccountIDs(t)
@@ -241,8 +235,7 @@ func TestProperty2_PerResearcherIsolation(t *testing.T) {
 	})
 }
 
-// TestProperty3_CachesNeverWidenAccess validates Property 3 on the Go-side
-// decision/Cache-Control logic: a cache may only make a decision staler, never
+// A cache may only make a decision staler, never
 // turn a deny into an allow, and correctness holds with caches removed.
 //
 // The Cache-Control max-age computed by the handler bounds how long any decision
@@ -250,11 +243,7 @@ func TestProperty2_PerResearcherIsolation(t *testing.T) {
 // exceeds the ceiling, so no cached entry can outlive or widen the fresh decision.
 // The handler itself is cacheless — every call recomputes from the records — so
 // the fresh decision is deterministic (correctness with caches removed).
-//
-// Note: the Rust in-process cache portion of this property is covered by task 15.6.
-//
-// Validates: Requirements 13.10
-func TestProperty3_CachesNeverWidenAccess(t *testing.T) {
+func TestCachesNeverWidenAccess(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		now := time.Now().UTC()
 		ceiling := time.Duration(rapid.Int64Range(1, 24).Draw(t, "ceilingHours")) * time.Hour
@@ -269,8 +258,7 @@ func TestProperty3_CachesNeverWidenAccess(t *testing.T) {
 			kind := rapid.SampledFrom([]testgen.ShareKind{
 				testgen.KindActiveLimited, testgen.KindActiveUnlimited,
 			}).Draw(t, "activeKind")
-			rec := testgen.ShareRecordOfKind(t, now, accountID, vpcArn, kind)
-			records = append(records, &rec)
+			records = append(records, new(testgen.ShareRecordOfKind(t, now, accountID, vpcArn, kind)))
 		}
 
 		cc := ComputeCacheControl(records, now, ceiling, denyTTL)
@@ -303,16 +291,11 @@ func TestProperty3_CachesNeverWidenAccess(t *testing.T) {
 	})
 }
 
-// TestProperty4_NoPartialShareEndToEnd validates Property 4 across the share
-// pipeline: failures at the preflight, resolution, or archived-file stages leave
+// Failures at the preflight, resolution, or archived-file stages leave
 // no Share_Record persisted. This drives the real warehouse.ValidateResolution
 // logic within the same preflight -> resolve -> validate -> create ordering the
 // share command uses, and asserts nothing is written on any failure path.
-//
-// This covers tasks 3.4 and 9.2.
-//
-// Validates: Requirements 1.6, 1.7, 1.8
-func TestProperty4_NoPartialShareEndToEnd(t *testing.T) {
+func TestNoPartialShareEndToEnd(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		account := testgen.AccountID(t)
 		vpcArn := testgen.VPCArnForAccount(account)
@@ -419,12 +402,10 @@ func runSharePipeline(ctx context.Context, store *ShareStore, account, vpcArn st
 	return rec, nil
 }
 
-// TestProperty10_IdempotentCreation validates Property 10: repeating an identical
+// Repeating an identical
 // share create yields the same share ID and never a duplicate active grant,
 // independent of library-ID ordering.
-//
-// Validates: Requirements 12.1
-func TestProperty10_IdempotentCreation(t *testing.T) {
+func TestIdempotentCreation(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		now := time.Now().UTC()
 		account := testgen.AccountID(t)

@@ -37,8 +37,6 @@ type libraryGrant struct {
 // null if any share is unlimited), and constructs htsget request paths.
 //
 // Returns nil if there are no active shares (the manifest should be deleted).
-//
-// Requirements: 7.1, 7.5, 7.6, 7.7
 func (g *Generator) Generate(shares []model.ShareRecord, now time.Time) *model.Manifest {
 	if len(shares) == 0 {
 		return nil
@@ -127,7 +125,7 @@ func buildManifestLibrary(grant libraryGrant) model.ManifestLibrary {
 }
 
 // computeEffectiveExpiry computes the effective expiry for a library across multiple shares.
-// Per Req 7.7: the effective expiry is the latest expiry among the shares granting that library,
+// The effective expiry is the latest expiry among the shares granting that library,
 // or nil if ANY granting share is unlimited (no expiry).
 func computeEffectiveExpiry(shares []*model.ShareRecord) *time.Time {
 	var latest *time.Time
@@ -149,7 +147,7 @@ func computeEffectiveExpiry(shares []*model.ShareRecord) *time.Time {
 // buildFiles constructs the ManifestFile entries for a library from the files the
 // granting shares recorded at share time.
 //
-// The request path is `reads/<htsgetId>` (Req 7.6: reads endpoint; variants out of
+// The request path is `reads/<htsgetId>` (reads endpoint; variants out of
 // scope), where the id is the object key without its bucket or format extension. The
 // library ID cannot stand in for it: htsget-rs resolves an id against an S3 key, and
 // a library maps to one or more objects whose keys are unrelated to its ID, so

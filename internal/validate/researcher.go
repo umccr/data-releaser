@@ -30,7 +30,7 @@ type ValidateResearcherOpts struct {
 }
 
 // ValidateResearcher runs researcher-side validation checks and returns per-check results.
-// It continues running all checks even if some fail (Req 15.7).
+// It continues running all checks even if some fail.
 func ValidateResearcher(ctx context.Context, opts ValidateResearcherOpts) []Check {
 	var checks []Check
 	checks = append(checks, checkRAMAssociation(ctx, opts.RAMClient, opts.AccountID))
@@ -157,7 +157,7 @@ func resourceCoversPrefix(resources *policy.StringOrSlice, bucket, prefixPath st
 // checkManifestBucketPolicy verifies the Manifest_Bucket's cross-account bucket policy
 // grants the target Researcher_Account read access (s3:GetObject) to its own manifest
 // prefix. If the grant is absent, it reports that the onboarding step which adds the
-// cross-account read grant to the Manifest_Bucket policy is incomplete (Req 15.9).
+// cross-account read grant to the Manifest_Bucket policy is incomplete.
 func checkManifestBucketPolicy(ctx context.Context, s3Client internalaws.S3Client, bucket, prefix, accountID string) Check {
 	const name = "Manifest_Bucket Cross-Account Read Grant"
 

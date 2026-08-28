@@ -44,13 +44,12 @@ func TestHandleCreate_Success(t *testing.T) {
 
 func TestHandleCreate_WithExpiry(t *testing.T) {
 	handler, _ := setupAdminHandler()
-	expiry := time.Now().UTC().Add(7 * 24 * time.Hour).Format(time.RFC3339)
 	req := CreateRequest{
 		ResearcherAccountID: "534840902377",
 		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123",
 		LibraryIDs:          []string{"L2400001"},
 		S3Prefixes:          []string{"s3://bucket/prefix1/"},
-		ExpiresAt:           &expiry,
+		ExpiresAt:           new(time.Now().UTC().Add(7 * 24 * time.Hour).Format(time.RFC3339)),
 	}
 	resp, errResp, status := handler.HandleCreate(context.Background(), req)
 	if errResp != nil {

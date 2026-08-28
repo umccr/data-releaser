@@ -47,7 +47,7 @@ func runExtend(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("invalid duration: %w", err)
 	}
 
-	// Validate minimum 1 day (same as share creation, Req 2.2)
+	// Validate minimum 1 day (same as share creation)
 	if duration < 24*time.Hour {
 		return fmt.Errorf("duration must be at least 1 day (24h), got %s", duration)
 	}
@@ -63,7 +63,7 @@ func runExtend(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// --- Step 3: Get the share first to check if it's unlimited (Req 9.5) ---
+	// --- Step 3: Get the share first to check if it's unlimited ---
 	store := auth.NewShareStore(factory.DynamoDBClient(), cfg.Authorization.ShareRecordsTable)
 
 	existing, err := store.Get(ctx, shareID)
@@ -74,13 +74,13 @@ func runExtend(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to retrieve share: %w", err)
 	}
 
-	// Check if unlimited: if ExpiresAt is nil, report and exit (Req 9.5)
+	// Check if unlimited: if ExpiresAt is nil, report and exit
 	if existing.ExpiresAt == nil {
 		fmt.Printf("Share %s already has unlimited duration; no extension needed.\n", shareID)
 		return nil
 	}
 
-	// --- Step 4: Extend the share (Req 9.1) ---
+	// --- Step 4: Extend the share ---
 	updated, err := store.Extend(ctx, shareID, duration)
 	if err != nil {
 		switch {
@@ -95,13 +95,13 @@ func runExtend(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// --- Step 5: Regenerate manifest for the affected researcher account (Req 9.3) ---
+	// --- Step 5: Regenerate manifest for the affected researcher account ---
 	// The extension is already durable, so the confirmation is printed either way; a
 	// manifest failure is still returned as an error, because the researcher's manifest
 	// now understates their access and the operator needs to retry.
 	manifestErr := extendManifest(ctx, cfg, factory, store, updated.ResearcherAccountID)
 
-	// --- Step 6: Output confirmation (Req 9.3) ---
+	// --- Step 6: Output confirmation ---
 	fmt.Printf("Share extended successfully:\n")
 	fmt.Printf("  Share ID:   %s\n", updated.ShareID)
 	fmt.Printf("  Account:    %s\n", updated.ResearcherAccountID)

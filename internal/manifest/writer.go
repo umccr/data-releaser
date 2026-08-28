@@ -16,8 +16,8 @@ import (
 
 // Writer handles uploading and deleting manifests in the Data Control Manifest_Bucket.
 // It uses the Data Control account credentials and performs a same-account write to the
-// single Manifest_Bucket, storing each researcher's manifest under a per-account key
-// (Req 7.9). Researcher access is read-only and cross-account, granted by the bucket
+// single Manifest_Bucket, storing each researcher's manifest under a per-account key.
+// Researcher access is read-only and cross-account, granted by the bucket
 // policy — the Writer never grants access.
 type Writer struct {
 	s3Client internalaws.S3Client
@@ -35,8 +35,6 @@ func NewWriter(s3Client internalaws.S3Client) *Writer {
 // existence and basic access; writability is conferred by the same-account identity's
 // IAM (the Manifest write is a same-account write). This is used as a share preflight
 // check so a share is never persisted only to fail on the subsequent manifest upload.
-//
-// Requirements: 7.10, 17.7, 1.8
 func (w *Writer) VerifyBucketWritable(ctx context.Context, bucket string) error {
 	_, err := w.s3Client.HeadBucket(ctx, &s3.HeadBucketInput{
 		Bucket: aws.String(bucket),
@@ -49,8 +47,6 @@ func (w *Writer) VerifyBucketWritable(ctx context.Context, bucket string) error 
 
 // Upload serializes the manifest to JSON and writes it to the per-account key in the
 // Data Control Manifest_Bucket using PutObject with ContentType "application/json".
-//
-// Requirements: 7.2
 func (w *Writer) Upload(ctx context.Context, bucket, key string, manifest *model.Manifest) error {
 	data, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
@@ -71,9 +67,7 @@ func (w *Writer) Upload(ctx context.Context, bucket, key string, manifest *model
 }
 
 // Delete removes the manifest from the Manifest_Bucket at the per-account key.
-// This is called when no active shares remain for the account (Req 7.4).
-//
-// Requirements: 7.3, 7.4
+// This is called when no active shares remain for the account.
 func (w *Writer) Delete(ctx context.Context, bucket, key string) error {
 	_, err := w.s3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
 		Bucket: aws.String(bucket),
@@ -89,8 +83,6 @@ func (w *Writer) Delete(ctx context.Context, bucket, key string) error {
 // Sync uploads or deletes the manifest based on whether active shares exist.
 // If manifest is nil (no active shares), the manifest is deleted from the bucket.
 // If manifest is non-nil, it is uploaded to the per-account key.
-//
-// Requirements: 7.2, 7.3, 7.4, 11.5
 func (w *Writer) Sync(ctx context.Context, bucket, key string, manifest *model.Manifest) error {
 	if manifest == nil {
 		return w.Delete(ctx, bucket, key)

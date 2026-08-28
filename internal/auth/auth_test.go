@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -146,7 +147,7 @@ func TestGet_NotFound(t *testing.T) {
 	store := NewShareStore(mock, "ShareRecords")
 
 	_, err := store.Get(context.Background(), "nonexistent-id")
-	if err != ErrShareNotFound {
+	if !errors.Is(err, ErrShareNotFound) {
 		t.Errorf("expected ErrShareNotFound, got %v", err)
 	}
 }
@@ -189,7 +190,7 @@ func TestRevoke_NotFound(t *testing.T) {
 	store := NewShareStore(mock, "ShareRecords")
 
 	_, err := store.Revoke(context.Background(), "nonexistent-id")
-	if err != ErrShareNotFound {
+	if !errors.Is(err, ErrShareNotFound) {
 		t.Errorf("expected ErrShareNotFound, got %v", err)
 	}
 }
@@ -223,7 +224,7 @@ func TestRevoke_AlreadyRevoked(t *testing.T) {
 
 	// Try to revoke again
 	_, err = store.Revoke(context.Background(), created.ShareID)
-	if err != ErrShareAlreadyRevoked {
+	if !errors.Is(err, ErrShareAlreadyRevoked) {
 		t.Errorf("expected ErrShareAlreadyRevoked, got %v", err)
 	}
 }
@@ -233,13 +234,12 @@ func TestRevoke_Expired(t *testing.T) {
 	store := NewShareStore(mock, "ShareRecords")
 
 	// Create a share with an expiry in the past
-	pastExpiry := time.Now().UTC().Add(-1 * time.Hour)
 	input := CreateInput{
 		ResearcherAccountID: "534840902377",
 		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123",
 		LibraryIDs:          []string{"L2400001"},
 		S3Prefixes:          []string{"s3://bucket/prefix1/"},
-		ExpiresAt:           &pastExpiry,
+		ExpiresAt:           new(time.Now().UTC().Add(-1 * time.Hour)),
 	}
 
 	created, err := store.Create(context.Background(), input)
@@ -248,7 +248,7 @@ func TestRevoke_Expired(t *testing.T) {
 	}
 
 	_, err = store.Revoke(context.Background(), created.ShareID)
-	if err != ErrShareExpired {
+	if !errors.Is(err, ErrShareExpired) {
 		t.Errorf("expected ErrShareExpired, got %v", err)
 	}
 }
@@ -258,13 +258,12 @@ func TestExtend_Success(t *testing.T) {
 	store := NewShareStore(mock, "ShareRecords")
 
 	// Create an active share with future expiry
-	futureExpiry := time.Now().UTC().Add(24 * time.Hour)
 	input := CreateInput{
 		ResearcherAccountID: "534840902377",
 		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123",
 		LibraryIDs:          []string{"L2400001"},
 		S3Prefixes:          []string{"s3://bucket/prefix1/"},
-		ExpiresAt:           &futureExpiry,
+		ExpiresAt:           new(time.Now().UTC().Add(24 * time.Hour)),
 	}
 
 	created, err := store.Create(context.Background(), input)
@@ -295,7 +294,7 @@ func TestExtend_NotFound(t *testing.T) {
 	store := NewShareStore(mock, "ShareRecords")
 
 	_, err := store.Extend(context.Background(), "nonexistent-id", 7*24*time.Hour)
-	if err != ErrShareNotFound {
+	if !errors.Is(err, ErrShareNotFound) {
 		t.Errorf("expected ErrShareNotFound, got %v", err)
 	}
 }
@@ -322,7 +321,7 @@ func TestExtend_AlreadyRevoked(t *testing.T) {
 	mock.Items[created.ShareID]["revokedAt"] = &types.AttributeValueMemberS{Value: revokedAt}
 
 	_, err = store.Extend(context.Background(), created.ShareID, 7*24*time.Hour)
-	if err != ErrShareAlreadyRevoked {
+	if !errors.Is(err, ErrShareAlreadyRevoked) {
 		t.Errorf("expected ErrShareAlreadyRevoked, got %v", err)
 	}
 }
@@ -332,13 +331,12 @@ func TestExtend_Expired(t *testing.T) {
 	store := NewShareStore(mock, "ShareRecords")
 
 	// Create with past expiry
-	pastExpiry := time.Now().UTC().Add(-1 * time.Hour)
 	input := CreateInput{
 		ResearcherAccountID: "534840902377",
 		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123",
 		LibraryIDs:          []string{"L2400001"},
 		S3Prefixes:          []string{"s3://bucket/prefix1/"},
-		ExpiresAt:           &pastExpiry,
+		ExpiresAt:           new(time.Now().UTC().Add(-1 * time.Hour)),
 	}
 
 	created, err := store.Create(context.Background(), input)
@@ -347,7 +345,7 @@ func TestExtend_Expired(t *testing.T) {
 	}
 
 	_, err = store.Extend(context.Background(), created.ShareID, 7*24*time.Hour)
-	if err != ErrShareExpired {
+	if !errors.Is(err, ErrShareExpired) {
 		t.Errorf("expected ErrShareExpired, got %v", err)
 	}
 }
@@ -510,8 +508,6 @@ func TestMarshalUnmarshal_RoundTrip(t *testing.T) {
 
 func TestMarshalUnmarshal_RoundTrip_WithRevokedAt(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
-	revokedAt := now.Add(-30 * time.Minute)
-
 	original := &model.ShareRecord{
 		ShareID:             "01HYPE7XXXXXXXXXXXXXXXXXXX",
 		ResearcherAccountID: "534840902377",
@@ -519,7 +515,7 @@ func TestMarshalUnmarshal_RoundTrip_WithRevokedAt(t *testing.T) {
 		LibraryIDs:          []string{"L2400001"},
 		S3Prefixes:          []string{"s3://bucket/prefix1/"},
 		CreatedAt:           now.Add(-time.Hour),
-		RevokedAt:           &revokedAt,
+		RevokedAt:           new(now.Add(-30 * time.Minute)),
 	}
 
 	item, err := marshalShareRecord(original)
@@ -570,7 +566,7 @@ func TestRevoke_AlreadyRevoked_StateUnchanged(t *testing.T) {
 
 	// Attempt revoke on already-revoked share
 	_, err = store.Revoke(context.Background(), created.ShareID)
-	if err != ErrShareAlreadyRevoked {
+	if !errors.Is(err, ErrShareAlreadyRevoked) {
 		t.Errorf("expected ErrShareAlreadyRevoked, got %v", err)
 	}
 
@@ -584,13 +580,12 @@ func TestRevoke_Expired_StateUnchanged(t *testing.T) {
 	store := NewShareStore(mock, "ShareRecords")
 
 	// Create a share with past expiry
-	pastExpiry := time.Now().UTC().Add(-1 * time.Hour)
 	input := CreateInput{
 		ResearcherAccountID: "534840902377",
 		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123",
 		LibraryIDs:          []string{"L2400001"},
 		S3Prefixes:          []string{"s3://bucket/prefix1/"},
-		ExpiresAt:           &pastExpiry,
+		ExpiresAt:           new(time.Now().UTC().Add(-1 * time.Hour)),
 	}
 
 	created, err := store.Create(context.Background(), input)
@@ -607,7 +602,7 @@ func TestRevoke_Expired_StateUnchanged(t *testing.T) {
 
 	// Attempt revoke on expired share
 	_, err = store.Revoke(context.Background(), created.ShareID)
-	if err != ErrShareExpired {
+	if !errors.Is(err, ErrShareExpired) {
 		t.Errorf("expected ErrShareExpired, got %v", err)
 	}
 
@@ -645,7 +640,7 @@ func TestExtend_Revoked_StateUnchanged(t *testing.T) {
 
 	// Attempt extend on revoked share
 	_, err = store.Extend(context.Background(), created.ShareID, 7*24*time.Hour)
-	if err != ErrShareAlreadyRevoked {
+	if !errors.Is(err, ErrShareAlreadyRevoked) {
 		t.Errorf("expected ErrShareAlreadyRevoked, got %v", err)
 	}
 
@@ -659,13 +654,12 @@ func TestExtend_Expired_StateUnchanged(t *testing.T) {
 	store := NewShareStore(mock, "ShareRecords")
 
 	// Create with past expiry
-	pastExpiry := time.Now().UTC().Add(-1 * time.Hour)
 	input := CreateInput{
 		ResearcherAccountID: "534840902377",
 		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123",
 		LibraryIDs:          []string{"L2400001"},
 		S3Prefixes:          []string{"s3://bucket/prefix1/"},
-		ExpiresAt:           &pastExpiry,
+		ExpiresAt:           new(time.Now().UTC().Add(-1 * time.Hour)),
 	}
 
 	created, err := store.Create(context.Background(), input)
@@ -682,7 +676,7 @@ func TestExtend_Expired_StateUnchanged(t *testing.T) {
 
 	// Attempt extend on expired share
 	_, err = store.Extend(context.Background(), created.ShareID, 7*24*time.Hour)
-	if err != ErrShareExpired {
+	if !errors.Is(err, ErrShareExpired) {
 		t.Errorf("expected ErrShareExpired, got %v", err)
 	}
 

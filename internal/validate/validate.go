@@ -69,7 +69,7 @@ type ValidateProviderOpts struct {
 }
 
 // ValidateProvider runs all provider-side checks and returns per-check results.
-// It continues running all checks even if some fail (Req 15.7).
+// It continues running all checks even if some fail.
 func ValidateProvider(ctx context.Context, opts ValidateProviderOpts) []Check {
 	var checks []Check
 
@@ -263,7 +263,7 @@ func checkCrossAccountS3(ctx context.Context, s3Client internalaws.S3Client, val
 }
 
 // checkShareRecordsTable verifies the Share_Record DynamoDB table provisioned by the
-// Infrastructure_Stack exists and is active (Req 15.10).
+// Infrastructure_Stack exists and is active.
 func checkShareRecordsTable(ctx context.Context, ddbClient internalaws.DynamoDBClient, tableName string) Check {
 	const name = "Share_Record DynamoDB Table (Infrastructure_Stack)"
 
@@ -286,7 +286,7 @@ func checkShareRecordsTable(ctx context.Context, ddbClient internalaws.DynamoDBC
 }
 
 // checkManifestBucket verifies the Manifest_Bucket provisioned by the Infrastructure_Stack
-// exists and is writable by the Data Control identity via a HeadBucket call (Req 15.10).
+// exists and is writable by the Data Control identity via a HeadBucket call.
 func checkManifestBucket(ctx context.Context, s3Client internalaws.S3Client, bucket string) Check {
 	const name = "Manifest_Bucket (Infrastructure_Stack)"
 
@@ -305,7 +305,7 @@ func checkManifestBucket(ctx context.Context, s3Client internalaws.S3Client, buc
 }
 
 // checkAPIGatewayStage verifies the API Gateway REST API stage named in configuration
-// exists (Req 15.10).
+// exists.
 func checkAPIGatewayStage(ctx context.Context, apiClient internalaws.APIGatewayClient, endpoints config.EndpointsConfig) Check {
 	const name = "API Gateway REST API Stage (Infrastructure_Stack)"
 

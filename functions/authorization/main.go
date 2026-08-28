@@ -3,16 +3,16 @@
 //
 // It is wiring only: it reads configuration from the environment, constructs a
 // DynamoDB client from the Lambda execution role, and delegates to the existing
-// auth.CalloutHandler in internal/auth. No business logic lives here (Req 16.6);
+// auth.CalloutHandler in internal/auth. No business logic lives here;
 // the handler logic has exactly one implementation, shared with the CLI's tests.
 //
 // Environment variables (read once at cold start):
 //
 //	SHARE_RECORDS_TABLE_NAME  (required) DynamoDB table holding Share_Records.
 //	CACHE_TTL_CEILING         (optional) max-age ceiling as a Go duration, e.g. "1h".
-//	                          Default 1h. Caps the allow Cache-Control (Req 13.1).
+//	                          Default 1h. Caps the allow Cache-Control.
 //	CACHE_DENY_TTL            (optional) negative-cache max-age as a Go duration,
-//	                          e.g. "60s". Default 60s (Req 13.2).
+//	                          e.g. "60s". Default 60s.
 //
 // The source VPC ARN of the requester arrives as the "Htsget-Context-SourceVpcArn"
 // request header. htsget-rs issues the authorization callout as a bare GET with

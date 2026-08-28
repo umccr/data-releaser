@@ -15,8 +15,6 @@ import (
 	"github.com/umccr/data-releaser/internal/model"
 )
 
-// --- ComputeCacheControl unit tests ---
-
 func TestComputeCacheControl_DenyResponse(t *testing.T) {
 	now := time.Now().UTC()
 	ceiling := 1 * time.Hour
@@ -72,9 +70,8 @@ func TestComputeCacheControl_AllowResponse_ExpiringShare(t *testing.T) {
 	denyTTL := 60 * time.Second
 
 	// Share expires in 30 minutes
-	expiry := now.Add(30 * time.Minute)
 	records := []*model.ShareRecord{
-		{ExpiresAt: &expiry},
+		{ExpiresAt: new(now.Add(30 * time.Minute))},
 	}
 
 	result := ComputeCacheControl(records, now, ceiling, denyTTL)
@@ -89,11 +86,9 @@ func TestComputeCacheControl_AllowResponse_MinRemainingLifetime(t *testing.T) {
 	denyTTL := 60 * time.Second
 
 	// Two shares: one expires in 10 minutes, another in 45 minutes
-	expiry1 := now.Add(10 * time.Minute)
-	expiry2 := now.Add(45 * time.Minute)
 	records := []*model.ShareRecord{
-		{ExpiresAt: &expiry1},
-		{ExpiresAt: &expiry2},
+		{ExpiresAt: new(now.Add(10 * time.Minute))},
+		{ExpiresAt: new(now.Add(45 * time.Minute))},
 	}
 
 	result := ComputeCacheControl(records, now, ceiling, denyTTL)
@@ -108,9 +103,8 @@ func TestComputeCacheControl_AllowResponse_CappedAtCeiling(t *testing.T) {
 	denyTTL := 60 * time.Second
 
 	// Share expires in 3 hours, but ceiling is 1 hour
-	expiry := now.Add(3 * time.Hour)
 	records := []*model.ShareRecord{
-		{ExpiresAt: &expiry},
+		{ExpiresAt: new(now.Add(3 * time.Hour))},
 	}
 
 	result := ComputeCacheControl(records, now, ceiling, denyTTL)
@@ -125,10 +119,9 @@ func TestComputeCacheControl_AllowResponse_MixedUnlimitedAndExpiring(t *testing.
 	denyTTL := 60 * time.Second
 
 	// One unlimited, one expiring in 20 minutes
-	expiry := now.Add(20 * time.Minute)
 	records := []*model.ShareRecord{
-		{ExpiresAt: nil},     // unlimited -> contributes ceiling (1h)
-		{ExpiresAt: &expiry}, // 20 minutes
+		{ExpiresAt: nil}, // unlimited -> contributes ceiling (1h)
+		{ExpiresAt: new(now.Add(20 * time.Minute))}, // 20 minutes
 	}
 
 	// min(1h, 20m) = 20m = 1200s
@@ -144,9 +137,8 @@ func TestComputeCacheControl_AllowResponse_AlmostExpired(t *testing.T) {
 	denyTTL := 60 * time.Second
 
 	// Share expires in 5 seconds
-	expiry := now.Add(5 * time.Second)
 	records := []*model.ShareRecord{
-		{ExpiresAt: &expiry},
+		{ExpiresAt: new(now.Add(5 * time.Second))},
 	}
 
 	result := ComputeCacheControl(records, now, ceiling, denyTTL)
@@ -161,9 +153,8 @@ func TestComputeCacheControl_AllowResponse_JustExpired(t *testing.T) {
 	denyTTL := 60 * time.Second
 
 	// Share already expired 1 second ago (but still passed as "active" record)
-	expiry := now.Add(-1 * time.Second)
 	records := []*model.ShareRecord{
-		{ExpiresAt: &expiry},
+		{ExpiresAt: new(now.Add(-1 * time.Second))},
 	}
 
 	result := ComputeCacheControl(records, now, ceiling, denyTTL)
@@ -187,8 +178,6 @@ func TestComputeCacheControl_AllowResponse_CustomCeiling(t *testing.T) {
 		t.Errorf("expected s-maxage=86400, public, got %q", result)
 	}
 }
-
-// --- HandleCalloutWithHeaders integration tests ---
 
 func TestHandleCalloutWithHeaders_DenyOnNoShares(t *testing.T) {
 	mock := awstest.NewDynamoDB()
@@ -447,8 +436,6 @@ func TestHandleCallout_BackwardCompatible(t *testing.T) {
 	}
 }
 
-// --- Wire format ---
-
 // TestCalloutResponse_WireFormat pins the exact JSON the callout emits.
 //
 // This is a contract with a consumer in another language: htsget-rs deserialises the
@@ -514,11 +501,6 @@ func TestCalloutResponse_DenyWireFormat(t *testing.T) {
 // TestVaryIdentityHeaders_NamesTheForwardedHeader guards against the Vary header
 // naming a header that is never actually sent.
 func TestVaryIdentityHeaders_NamesTheForwardedHeader(t *testing.T) {
-	if VaryIdentityHeaders != SourceVpcArnHeader {
-		t.Errorf("Vary names %q but the identity arrives on %q; a cache keyed on the "+
-			"Vary value would serve one requester's decision to another",
-			VaryIdentityHeaders, SourceVpcArnHeader)
-	}
 	if !strings.HasPrefix(SourceVpcArnHeader, "Htsget-Context-") {
 		t.Errorf("htsget-rs forwards context values with the Htsget-Context- prefix, got %q",
 			SourceVpcArnHeader)

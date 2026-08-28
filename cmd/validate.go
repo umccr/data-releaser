@@ -103,7 +103,7 @@ func runValidate(cmd *cobra.Command, args []string) error {
 			AccountID:      accountID,
 			ManifestBucket: cfg.Manifest.Bucket,
 		}
-		// Resolve the account's manifest prefix for the cross-account read-grant check (Req 15.9).
+		// Resolve the account's manifest prefix for the cross-account read-grant check.
 		if prefix, prefixErr := cfg.Manifest.RenderManifestPrefix(accountID); prefixErr == nil {
 			researcherOpts.ManifestPrefix = prefix
 		}
@@ -118,7 +118,7 @@ func runValidate(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Run canary test-setup mode if --test-setup is set (Req 15.6, 15.8)
+	// Run canary test-setup mode if --test-setup is set
 	testSetup, _ := cmd.Flags().GetBool("test-setup")
 	if testSetup {
 		fmt.Println()

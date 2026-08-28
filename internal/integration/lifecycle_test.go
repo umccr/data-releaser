@@ -6,8 +6,6 @@
 // state and the S3 manifest object presence/absence at each step.
 //
 // Run with: go test -tags=integration ./internal/integration/...
-//
-// Requirements exercised: 1.5, 3.1, 7.1, 7.3, 7.4 (and satisfies task 18.3).
 package integration
 
 import (
@@ -105,9 +103,6 @@ func TestShareRevokeManifestLifecycle(t *testing.T) {
 		t.Fatalf("unexpected manifest key: %q", manifestKey)
 	}
 
-	// ------------------------------------------------------------------
-	// Step 1: share create.
-	// ------------------------------------------------------------------
 	expiresAt := time.Now().UTC().Add(24 * time.Hour)
 	record, reused, err := store.CreateIdempotent(ctx, auth.CreateInput{
 		ResearcherAccountID: researcherAccountID,
@@ -146,9 +141,6 @@ func TestShareRevokeManifestLifecycle(t *testing.T) {
 		t.Fatalf("expected manifest object s3://%s/%s to exist after create", bucket, manifestKey)
 	}
 
-	// ------------------------------------------------------------------
-	// Step 2: revoke.
-	// ------------------------------------------------------------------
 	revoked, err := store.Revoke(ctx, record.ShareID)
 	if err != nil {
 		t.Fatalf("Revoke: %v", err)

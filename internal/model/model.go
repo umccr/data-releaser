@@ -22,7 +22,7 @@ const (
 
 // ShareRecord represents a persistent record describing which library IDs are shared
 // to which AWS account, including expiry and status. Stored in DynamoDB with shareId
-// as the partition key (Req 10.2).
+// as the partition key.
 type ShareRecord struct {
 	// ShareID is the unique identifier for the share (ULID).
 	ShareID string `json:"shareId"`
@@ -50,7 +50,7 @@ type ShareRecord struct {
 	// CreatedAt is the UTC timestamp when the share was created.
 	CreatedAt time.Time `json:"createdAt"`
 
-	// ExpiresAt is the optional expiry timestamp. Nil means unlimited duration (Req 2).
+	// ExpiresAt is the optional expiry timestamp. Nil means unlimited duration.
 	ExpiresAt *time.Time `json:"expiresAt"`
 
 	// RevokedAt is the optional timestamp when the share was revoked. Nil means not revoked.
@@ -130,8 +130,8 @@ type ManifestLibrary struct {
 }
 
 // Manifest is the JSON document listing the library IDs and file references that a
-// researcher has been granted access to. One manifest per Researcher_Account (Req 7).
-// The manifest is tool-generated and descriptive only — it does not grant access (Req 7.8).
+// researcher has been granted access to. One manifest per Researcher_Account.
+// The manifest is tool-generated and descriptive only — it does not grant access.
 type Manifest struct {
 	// HtsgetBaseUrl is the htsget-rs base URL for constructing request URLs.
 	HtsgetBaseUrl string `json:"htsgetBaseUrl"`

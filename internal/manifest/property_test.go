@@ -10,15 +10,11 @@ import (
 	"github.com/umccr/data-releaser/internal/testgen"
 )
 
-// TestProperty9_ManifestConvergence validates Property 9: after any sequence of
+// After any sequence of
 // create/revoke/extend/expiry operations, the generated manifest reflects exactly
 // the library IDs of the remaining active grants, and is nil (i.e. deleted by the
 // writer's Sync) when no active grants remain.
-//
-// This covers task 7.3.
-//
-// Validates: Requirements 7.3, 7.4
-func TestProperty9_ManifestConvergence(t *testing.T) {
+func TestManifestConvergence(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		now := time.Now().UTC()
 		seq := testgen.Operations(t, now, 5, 8)

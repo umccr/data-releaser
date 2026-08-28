@@ -41,9 +41,9 @@ func resolveManifestTarget(cfg *config.Config, accountID string) (manifestTarget
 // share, extend, and revoke all perform.
 //
 // The manifest is derived from the full share list rather than the mutated share alone:
-// a researcher has one manifest covering all their shares (Req 7.1), so it must be
+// a researcher has one manifest covering all their shares, so it must be
 // rebuilt from the current set. When no active shares remain the generator returns nil
-// and Sync deletes the object (Req 7.4).
+// and Sync deletes the object.
 func regenerateManifest(ctx context.Context, cfg *config.Config, writer *manifest.Writer, store *auth.ShareStore, accountID string, target manifestTarget) error {
 	allShares, err := store.ListByAccount(ctx, accountID)
 	if err != nil {

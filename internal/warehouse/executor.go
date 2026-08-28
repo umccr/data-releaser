@@ -49,8 +49,6 @@ func (c *Client) SetPollInterval(d time.Duration) {
 //  3. Polls until the query reaches a terminal state (SUCCEEDED, FAILED, CANCELLED)
 //  4. On FAILED/CANCELLED: returns an error with the Athena error message
 //  5. On SUCCEEDED: parses the result rows into ResolvedLibrary structs
-//
-// Requirements: 1.3, 1.8
 func (c *Client) ResolveLibraries(ctx context.Context, libraryIDs []string) ([]model.ResolvedLibrary, error) {
 	query, err := BuildResolutionQuery(c.database, libraryIDs)
 	if err != nil {

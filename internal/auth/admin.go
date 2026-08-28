@@ -14,8 +14,6 @@ import (
 // AdminHandler provides HTTP-style handlers for the admin API endpoints
 // (create, revoke, extend, list) of the Authorization Service.
 // These handlers are designed to be deployed as a Lambda behind API Gateway.
-//
-// Requirements: 10.2, 10.3, 10.6, 10.7
 type AdminHandler struct {
 	store *ShareStore
 }
@@ -109,8 +107,6 @@ const (
 
 // HandleCreate processes a create share request. It persists a ShareRecord to DynamoDB
 // and returns the share ID. Uses idempotent creation to prevent duplicates.
-//
-// Requirements: 10.2 (DynamoDB storage), 12.1 (idempotent creation)
 func (h *AdminHandler) HandleCreate(ctx context.Context, req CreateRequest) (*CreateResponse, *ErrorResponse, int) {
 	// Validate input
 	if req.ResearcherAccountID == "" {
@@ -144,7 +140,7 @@ func (h *AdminHandler) HandleCreate(ctx context.Context, req CreateRequest) (*Cr
 		t, err := time.Parse(time.RFC3339, *req.ExpiresAt)
 		if err != nil {
 			return nil, &ErrorResponse{
-				Error:   "invalid expiresAt format, expected ISO 8601 (RFC3339)",
+				Error:   "invalid expiresAt format, expected ISO 8601",
 				Code:    ErrCodeInvalidInput,
 				Details: err.Error(),
 			}, http.StatusBadRequest
@@ -189,8 +185,7 @@ func (h *AdminHandler) HandleCreate(ctx context.Context, req CreateRequest) (*Cr
 		Reused:              reused,
 	}
 	if record.ExpiresAt != nil {
-		s := record.ExpiresAt.Format(time.RFC3339)
-		resp.ExpiresAt = &s
+		resp.ExpiresAt = new(record.ExpiresAt.Format(time.RFC3339))
 	}
 
 	status := http.StatusCreated
@@ -202,8 +197,6 @@ func (h *AdminHandler) HandleCreate(ctx context.Context, req CreateRequest) (*Cr
 
 // HandleRevoke processes a revoke share request. It performs a conditional update
 // setting revokedAt, with state-conflict guards for already-revoked and expired shares.
-//
-// Requirements: 10.3 (conditional update), state-conflict guards (3.3, 3.5, 3.6)
 func (h *AdminHandler) HandleRevoke(ctx context.Context, req RevokeRequest) (*RevokeResponse, *ErrorResponse, int) {
 	if req.ShareID == "" {
 		return nil, &ErrorResponse{
@@ -225,8 +218,6 @@ func (h *AdminHandler) HandleRevoke(ctx context.Context, req RevokeRequest) (*Re
 
 // HandleExtend processes an extend share request. It performs a conditional update
 // to expiresAt, with state-conflict guards for revoked and expired shares.
-//
-// Requirements: 10.3 (conditional update), state-conflict guards (9.2, 9.4)
 func (h *AdminHandler) HandleExtend(ctx context.Context, req ExtendRequest) (*ExtendResponse, *ErrorResponse, int) {
 	if req.ShareID == "" {
 		return nil, &ErrorResponse{
@@ -270,8 +261,6 @@ func (h *AdminHandler) HandleExtend(ctx context.Context, req ExtendRequest) (*Ex
 
 // HandleList processes a list shares request. It queries GSI2 by researcherAccountId
 // (if provided) or scans all records.
-//
-// Requirements: 10.6 (list), 10.7 (DynamoDB error → deny/error indication)
 func (h *AdminHandler) HandleList(ctx context.Context, req ListRequest) (*ListResponse, *ErrorResponse, int) {
 	var records []*model.ShareRecord
 	var err error
@@ -303,12 +292,10 @@ func (h *AdminHandler) HandleList(ctx context.Context, req ListRequest) (*ListRe
 			Status:              string(r.EffectiveStatus(now)),
 		}
 		if r.ExpiresAt != nil {
-			s := r.ExpiresAt.Format(time.RFC3339)
-			share.ExpiresAt = &s
+			share.ExpiresAt = new(r.ExpiresAt.Format(time.RFC3339))
 		}
 		if r.RevokedAt != nil {
-			s := r.RevokedAt.Format(time.RFC3339)
-			share.RevokedAt = &s
+			share.RevokedAt = new(r.RevokedAt.Format(time.RFC3339))
 		}
 		shares = append(shares, share)
 	}
@@ -327,7 +314,7 @@ func (h *AdminHandler) HandleRequest(ctx context.Context, method, path string, b
 	case method == http.MethodPost && path == "/admin/shares/extend":
 		return serveJSON(ctx, body, false, h.HandleExtend)
 	case method == http.MethodGet && path == "/admin/shares":
-		// A GET carries no body; its only parameter is an optional account filter.
+		// A GET carries no body, its only parameter is an optional account filter.
 		return serveJSON(ctx, body, true, h.HandleList)
 	default:
 		return marshalError(http.StatusNotFound, &ErrorResponse{

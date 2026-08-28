@@ -15,7 +15,7 @@ import (
 // association via AWS RAM. If this check fails, the share command must refuse to
 // proceed and report the reason to the operator.
 //
-// Error conditions (Requirements 5.4, 5.5):
+// Error conditions:
 //   - No active RAM association: share refused with descriptive message about missing connectivity
 //   - RAM API unavailable or permission denied: share refused with error indicating verification failure
 //

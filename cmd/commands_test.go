@@ -47,7 +47,7 @@ func activeShares(t *testing.T, store *auth.ShareStore, account string, now time
 }
 
 // TestShareCreationFlow covers the happy path of the share command: an idempotent create
-// persists a Share_Record and the generated manifest reflects it (Req 3.1, 7.1).
+// persists a Share_Record and the generated manifest reflects it.
 func TestShareCreationFlow(t *testing.T) {
 	store, m := newStore()
 	account := "534840902377"
@@ -104,7 +104,7 @@ func TestShareCreationFlow(t *testing.T) {
 }
 
 // TestRevokeTransition covers revoke marking an active share revoked and regenerating the
-// manifest (which becomes empty when no active shares remain) (Req 3.1, 7.4).
+// manifest (which becomes empty when no active shares remain).
 func TestRevokeTransition(t *testing.T) {
 	store, _ := newStore()
 	account := "534840902377"
@@ -181,7 +181,7 @@ func TestRevokeConflicts(t *testing.T) {
 	}
 }
 
-// TestExtendTransition covers extend updating the expiry of an active share (Req 9.1).
+// TestExtendTransition covers extend updating the expiry of an active share.
 func TestExtendTransition(t *testing.T) {
 	store, _ := newStore()
 	initial := time.Now().UTC().Add(24 * time.Hour)

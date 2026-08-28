@@ -21,8 +21,6 @@ import (
 // behaviour without a live AWS account. Defaults return successful, empty responses so a
 // test only overrides the seam it cares about.
 
-// --- STS ---------------------------------------------------------------------
-
 type stubSTSClient struct {
 	fn func(ctx context.Context, params *sts.GetCallerIdentityInput) (*sts.GetCallerIdentityOutput, error)
 }
@@ -36,8 +34,6 @@ func (m *stubSTSClient) GetCallerIdentity(ctx context.Context, params *sts.GetCa
 	acct := "534840902377"
 	return &sts.GetCallerIdentityOutput{Account: &acct}, nil
 }
-
-// --- Athena ------------------------------------------------------------------
 
 type stubAthenaClient struct {
 	startFn      func(ctx context.Context, params *athena.StartQueryExecutionInput) (*athena.StartQueryExecutionOutput, error)
@@ -69,8 +65,6 @@ func (m *stubAthenaClient) GetQueryResults(ctx context.Context, params *athena.G
 	return &athena.GetQueryResultsOutput{}, nil
 }
 
-// --- API Gateway -------------------------------------------------------------
-
 type stubAPIGatewayClient struct {
 	getStageFn func(ctx context.Context, params *apigateway.GetStageInput) (*apigateway.GetStageOutput, error)
 }
@@ -84,8 +78,6 @@ func (m *stubAPIGatewayClient) GetStage(ctx context.Context, params *apigateway.
 	return &apigateway.GetStageOutput{}, nil
 }
 
-// --- RAM ---------------------------------------------------------------------
-
 type stubRAMClient struct {
 	fn func(ctx context.Context, params *ram.GetResourceShareAssociationsInput) (*ram.GetResourceShareAssociationsOutput, error)
 }
@@ -98,8 +90,6 @@ func (m *stubRAMClient) GetResourceShareAssociations(ctx context.Context, params
 	}
 	return &ram.GetResourceShareAssociationsOutput{}, nil
 }
-
-// --- Lambda ------------------------------------------------------------------
 
 type stubLambdaClient struct {
 	invokeFn        func(ctx context.Context, params *lambda.InvokeInput) (*lambda.InvokeOutput, error)
@@ -121,8 +111,6 @@ func (m *stubLambdaClient) ListFunctions(ctx context.Context, params *lambda.Lis
 	}
 	return &lambda.ListFunctionsOutput{}, nil
 }
-
-// --- HTTP --------------------------------------------------------------------
 
 type stubHTTPClient struct {
 	doFn func(req *http.Request) (*http.Response, error)

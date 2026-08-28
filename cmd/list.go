@@ -63,7 +63,7 @@ func runList(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to query shares: %w", err)
 	}
 
-	// Handle empty results (Req 8.4, 8.6).
+	// Handle empty results.
 	if len(records) == 0 {
 		if account != "" {
 			fmt.Printf("No shares found for account %s.\n", account)
@@ -73,16 +73,16 @@ func runList(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// Display tabular output (Req 8.2). All records are rendered regardless of
-	// effective status, so expired and revoked shares remain visible (Req 8.1).
+	// Display tabular output. All records are rendered regardless of
+	// effective status, so expired and revoked shares remain visible.
 	renderShareTable(os.Stdout, records, time.Now().UTC())
 	return nil
 }
 
 // renderShareTable writes the tabular share listing to w. Every record is rendered,
-// including expired and revoked shares (they must remain visible per Req 8.1), with the
+// including expired and revoked shares (they must remain visible), with the
 // effective status computed against now. Records are shown in the order provided (the
-// store returns them ordered by createdAt descending, Req 8.5).
+// store returns them ordered by createdAt descending).
 func renderShareTable(w io.Writer, records []*model.ShareRecord, now time.Time) {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "SHARE ID\tACCOUNT\tLIBRARIES\tCREATED\tEXPIRY\tSTATUS")

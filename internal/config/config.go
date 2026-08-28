@@ -81,8 +81,7 @@ func (cfg *Config) ResolveTargetVpcArn(accountID string) (string, error) {
 // same-account Data Control bucket (sourced from an Infrastructure_Stack output);
 // each Researcher_Account's manifest lives under a per-account key prefix.
 type ManifestConfig struct {
-	// Bucket is the Data Control Manifest_Bucket name. It is never hard-coded and
-	// is sourced from the Infrastructure_Stack output (Req 7.2, 7.9).
+	// Bucket is the Data Control Manifest_Bucket name.
 	Bucket string `yaml:"bucket"`
 	// KeyTemplate is the per-account object key template. It supports the
 	// {accountId} placeholder and defaults to DefaultManifestKeyTemplate.
@@ -97,7 +96,7 @@ var manifestPlaceholderRe = regexp.MustCompile(`\{[^}]*\}`)
 
 // RenderManifestKey renders the manifest key template for the given account ID by
 // substituting the {accountId} placeholder. Any other {...} token is rejected with
-// a descriptive error so misconfigured templates fail fast (Req 7.2).
+// a descriptive error so misconfigured templates fail fast.
 func (m ManifestConfig) RenderManifestKey(accountID string) (string, error) {
 	var rerr error
 	rendered := manifestPlaceholderRe.ReplaceAllStringFunc(m.KeyTemplate, func(token string) string {
@@ -144,10 +143,10 @@ type EndpointsConfig struct {
 	Authorization string `yaml:"authorization"`
 	HtsgetBaseURL string `yaml:"htsgetBaseUrl"`
 	// APIGatewayRestAPIID is the REST API ID for the Authorization Service API Gateway.
-	// Used by the `validate` command's API Gateway stage check (Req 15.10).
+	// Used by the `validate` command's API Gateway stage check.
 	APIGatewayRestAPIID string `yaml:"apiGatewayRestApiId"`
 	// APIGatewayStageName is the stage name for the Authorization Service API Gateway.
-	// Used by the `validate` command's API Gateway stage check (Req 15.10). Defaults to "prod".
+	// Used by the `validate` command's API Gateway stage check. Defaults to "prod".
 	APIGatewayStageName string `yaml:"apiGatewayStageName"`
 }
 
@@ -212,10 +211,10 @@ func (d Duration) MarshalYAML() (any, error) {
 	return d.Duration.String(), nil
 }
 
-// DefaultCacheTTLCeiling is the default max-age ceiling for authorization responses (Req 13.1).
+// DefaultCacheTTLCeiling is the default max-age ceiling for authorization responses.
 const DefaultCacheTTLCeiling = 1 * time.Hour
 
-// DefaultCacheDenyTTL is the default negative-cache TTL for deny responses (Req 13.2).
+// DefaultCacheDenyTTL is the default negative-cache TTL for deny responses.
 const DefaultCacheDenyTTL = 60 * time.Second
 
 // Load reads configuration from the specified file path, applies defaults, and validates
@@ -312,7 +311,7 @@ func validate(cfg *Config) error {
 		errs = append(errs, "endpoints.htsgetBaseUrl is required")
 	}
 
-	// Validate the manifest key template renders and rejects unknown placeholders (Req 7.2).
+	// Validate the manifest key template renders and rejects unknown placeholders.
 	if _, err := cfg.Manifest.RenderManifestKey("000000000000"); err != nil {
 		errs = append(errs, err.Error())
 	}

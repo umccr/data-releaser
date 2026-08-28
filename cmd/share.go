@@ -109,7 +109,7 @@ func runShare(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("reading --target-vpc-arn flag: %w", err)
 	}
 
-	// Validate: reject empty library list (Req 1.2)
+	// Validate: reject empty library list
 	if len(libraries) == 0 {
 		return fmt.Errorf("at least one library ID is required (--libraries must not be empty)")
 	}
@@ -126,13 +126,13 @@ func runShare(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("at least one library ID is required (--libraries must not be empty)")
 	}
 
-	// Validate: reject missing account (Req 1.2)
+	// Validate: reject missing account
 	account = strings.TrimSpace(account)
 	if account == "" {
 		return fmt.Errorf("researcher account ID is required (--account must not be empty)")
 	}
 
-	// Validate and parse expiry (Req 2.1, 2.2)
+	// Validate and parse expiry
 	var expiresAt *time.Time
 	if expiryStr != "" {
 		duration, err := parseDuration(expiryStr)
@@ -164,14 +164,14 @@ func runShare(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// --- Step 3: Run preflight - verify VPC Lattice/RAM connectivity (Req 5.4) ---
+	// --- Step 3: Run preflight - verify VPC Lattice/RAM connectivity ---
 	checker := lattice.NewChecker(factory.RAMClient())
 	if err := lattice.Preflight(ctx, checker, account); err != nil {
 		return err
 	}
 
 	// --- Step 3b: Preflight - verify the Manifest_Bucket exists and is writable by
-	// the Data Control identity BEFORE any Share_Record is created (Req 7.10, 17.7, 1.8).
+	// the Data Control identity BEFORE any Share_Record is created.
 	// This removes the window where a share is persisted and only then fails on the
 	// manifest upload.
 	writer := manifest.NewWriter(factory.S3Client())
@@ -184,25 +184,25 @@ func runShare(cmd *cobra.Command, args []string) error {
 			"the Infrastructure_Stack is not deployed or is misconfigured: %w", target.bucket, err)
 	}
 
-	// --- Step 4: Resolve libraries via Athena (Req 1.3) ---
+	// --- Step 4: Resolve libraries via Athena ---
 	whClient := warehouse.NewClient(factory.AthenaClient(), cfg.Warehouse)
 	resolved, err := whClient.ResolveLibraries(ctx, cleanLibraries)
 	if err != nil {
 		return fmt.Errorf("failed to resolve libraries: %w", err)
 	}
 
-	// --- Step 5: Validate resolution (Req 1.6, 1.7) ---
+	// --- Step 5: Validate resolution ---
 	if err := warehouse.ValidateResolution(cleanLibraries, resolved); err != nil {
 		return err
 	}
 
-	// --- Step 6: Extract S3 prefixes (Req 1.4) ---
+	// --- Step 6: Extract S3 prefixes ---
 	// The prefixes are what authorization is granted on. The per-file list is recorded
 	// alongside them purely so the manifest can name each file's htsget request path.
 	prefixes := warehouse.ExtractPrefixes(resolved)
 	files := warehouse.ExtractFiles(resolved)
 
-	// --- Step 7: Idempotency check and create share record (Req 1.5, 12.1) ---
+	// --- Step 7: Idempotency check and create share record ---
 	store := auth.NewShareStore(factory.DynamoDBClient(), cfg.Authorization.ShareRecordsTable)
 
 	createInput := auth.CreateInput{
@@ -219,12 +219,12 @@ func runShare(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to create share record: %w", err)
 	}
 
-	// --- Step 8/9: Regenerate and upload the researcher's manifest (Req 7.1, 7.2) ---
+	// --- Step 8/9: Regenerate and upload the researcher's manifest ---
 	if err := regenerateManifest(ctx, cfg, writer, store, account, target); err != nil {
 		return fmt.Errorf("manifest upload failed (share %s was created): %w", record.ShareID, err)
 	}
 
-	// --- Step 10: Output confirmation (Req 1.9) ---
+	// --- Step 10: Output confirmation ---
 	if reused {
 		fmt.Printf("Existing share reused (idempotent match):\n")
 	} else {

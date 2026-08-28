@@ -13,8 +13,7 @@ import (
 )
 
 // Checker verifies that a researcher account has an active VPC Lattice service
-// network association via AWS RAM. This is a prerequisite for share creation
-// (Requirements 5.1, 5.2, 5.3, 5.4).
+// network association via AWS RAM. This is a prerequisite for share creation.
 type Checker struct {
 	ramClient internalaws.RAMClient
 }
@@ -30,9 +29,9 @@ func NewChecker(ramClient internalaws.RAMClient) *Checker {
 //
 // Returns nil if an active association is found.
 // Returns a descriptive error if:
-//   - No association exists for the account (Req 5.3)
-//   - The association exists but is not in ASSOCIATED status (Req 5.4)
-//   - The RAM API is unavailable or permission is denied (Req 5.5)
+//   - No association exists for the account
+//   - The association exists but is not in ASSOCIATED status
+//   - The RAM API is unavailable or permission is denied
 func (c *Checker) VerifyAssociation(ctx context.Context, researcherAccountID string) error {
 	input := &ram.GetResourceShareAssociationsInput{
 		AssociationType: ramtypes.ResourceShareAssociationTypePrincipal,

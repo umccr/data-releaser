@@ -122,7 +122,7 @@ func TestFormatExpiry(t *testing.T) {
 }
 
 // TestRenderShareTable_ShowsAllStatuses verifies the listing renders active, expired,
-// and revoked records — expired and revoked shares must remain visible (Req 8.1).
+// and revoked records — expired and revoked shares must remain visible.
 func TestRenderShareTable_ShowsAllStatuses(t *testing.T) {
 	now := time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC)
 	past := now.Add(-24 * time.Hour)

@@ -1,5 +1,4 @@
-// Package validate - canary test-setup mode for end-to-end validation.
-// Implements Requirement 15.6 and 15.8: creates a short-lived synthetic Share_Record
+// Package validate - canary test-setup mode for end-to-end validation. Creates a short-lived synthetic Share_Record
 // for the configured canary library, invokes the Test_Lambda to confirm canary data
 // is retrievable end-to-end, and cleans up the synthetic share on exit (best-effort).
 package validate
@@ -56,7 +55,6 @@ func validateTestLambdaResponse(resp testLambdaResponse) (ok bool, reason string
 // library, invokes the Test_Lambda to confirm canary data is retrievable end-to-end,
 // and always cleans up the synthetic share (including on error, best-effort).
 // Returns a Check indicating success/failure of the simulated share path.
-// Requirements: 15.6, 15.8
 func RunCanaryTest(ctx context.Context, opts CanaryOpts) Check {
 	const name = "Canary Test-Setup (end-to-end share path)"
 

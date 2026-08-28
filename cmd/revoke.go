@@ -45,12 +45,12 @@ func runRevoke(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// --- Step 2: Revoke the share via auth service (Req 3.1) ---
+	// --- Step 2: Revoke the share via auth service ---
 	store := auth.NewShareStore(factory.DynamoDBClient(), cfg.Authorization.ShareRecordsTable)
 
 	record, err := store.Revoke(ctx, shareID)
 	if err != nil {
-		// Handle specific state-conflict errors (Req 3.3, 3.5, 3.6, 3.7)
+		// Handle specific state-conflict errors
 		switch {
 		case errors.Is(err, auth.ErrShareNotFound):
 			return fmt.Errorf("share %q not found", shareID)
@@ -63,7 +63,7 @@ func runRevoke(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// --- Step 3: Regenerate manifest (Req 7.3, 7.4) ---
+	// --- Step 3: Regenerate manifest ---
 	// A manifest failure is reported but does not fail the command: the revocation is
 	// already durable, and re-running revoke would only report a conflict.
 	if target, targetErr := resolveManifestTarget(cfg, record.ResearcherAccountID); targetErr != nil {
@@ -72,7 +72,7 @@ func runRevoke(cmd *cobra.Command, args []string) error {
 		warnf(cmd, "manifest regeneration failed (revocation still applied): %v", syncErr)
 	}
 
-	// --- Step 4: Output confirmation (Req 3.4) ---
+	// --- Step 4: Output confirmation ---
 	revokedAt := record.RevokedAt.Format(time.RFC3339)
 	fmt.Printf("Share revoked successfully:\n")
 	fmt.Printf("  Share ID:    %s\n", record.ShareID)

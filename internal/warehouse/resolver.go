@@ -91,8 +91,6 @@ func IsArchivedStorageClass(storageClass string) bool {
 // library ID at once rather than fixing them one by one.
 //
 // Returns nil if all requested library IDs have non-archived results.
-//
-// Requirements: 1.1, 1.4, 1.6, 1.7
 func ValidateResolution(requestedLibraryIDs []string, resolved []model.ResolvedLibrary) error {
 	// Build a set of library IDs that have at least one result
 	resolvedSet := make(map[string]bool)

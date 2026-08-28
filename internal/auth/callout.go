@@ -89,8 +89,7 @@ type CalloutResult struct {
 
 	// Vary is the Vary header value naming every forwarded identity header
 	// the decision depends on, so that any cache implementing secondary cache
-	// keys can revalidate correctly and so that the fail-closed storage
-	// precondition of Req 13.6 is satisfiable (Req 13.3).
+	// keys can revalidate correctly.
 	Vary string
 }
 
@@ -102,14 +101,12 @@ type CalloutResult struct {
 // them. Behaviour is otherwise identical: active shares contribute location entries, no
 // match yields an empty htsgetAuth array (deny), and an unreachable store yields a deny
 // plus an error.
-//
-// Requirements: 4.2, 4.3, 4.4, 2.4, 2.5, 2.6
 func (h *CalloutHandler) HandleCallout(ctx context.Context, sourceVpcArn string) (*CalloutResponse, error) {
 	result, err := h.HandleCalloutWithHeaders(ctx, sourceVpcArn, DefaultCacheTTLCeiling, DefaultCacheDenyTTL)
 	return result.Response, err
 }
 
-// Default cache TTLs applied when a caller does not supply its own (Req 13.1, 13.2).
+// Default cache TTLs applied when a caller does not supply its own.
 const (
 	DefaultCacheTTLCeiling = time.Hour
 	DefaultCacheDenyTTL    = 60 * time.Second
@@ -126,13 +123,12 @@ const (
 const SourceVpcArnHeader = "Htsget-Context-SourceVpcArn"
 
 // VaryIdentityHeaders is the Vary header value the Authorization_Service emits
-// on every callout response (Req 13.3). It names the forwarded identity header(s)
+// on every callout response. It names the forwarded identity header(s)
 // that the authorization decision depends on, so that:
 //   - any cache implementing secondary cache keys can revalidate correctly, and
-//   - the fail-closed storage precondition of Req 13.6 is satisfiable.
+//   - the fail-closed storage precondition is satisfiable.
 //
-// Per-requester isolation itself rests on the declared cache key in htsget-rs
-// (Req 14.4), NOT on this header.
+// Per-requester isolation itself rests on the declared cache key in htsget-rs, NOT on this header.
 const VaryIdentityHeaders = SourceVpcArnHeader
 
 // HandleCalloutWithHeaders processes an authorization callout for the given source VPC ARN
@@ -141,12 +137,10 @@ const VaryIdentityHeaders = SourceVpcArnHeader
 // Parameters:
 //   - ctx: context for the DynamoDB query
 //   - sourceVpcArn: the requester's VPC ARN
-//   - ceiling: the maximum allowed max-age (TTL ceiling, Req 13.1)
-//   - denyTTL: the max-age for deny responses (Req 13.2)
+//   - ceiling: the maximum allowed max-age (TTL ceiling)
+//   - denyTTL: the max-age for deny responses
 //
 // Returns a CalloutResult containing both the response and the Cache-Control header.
-//
-// Requirements: 4.2, 4.3, 4.4, 2.4, 2.5, 2.6, 13.1, 13.2, 13.3
 func (h *CalloutHandler) HandleCalloutWithHeaders(ctx context.Context, sourceVpcArn string, ceiling time.Duration, denyTTL time.Duration) (*CalloutResult, error) {
 	now := time.Now().UTC()
 
@@ -161,7 +155,6 @@ func (h *CalloutHandler) HandleCalloutWithHeaders(ctx context.Context, sourceVpc
 	})
 	if err != nil {
 		// DynamoDB unreachable: return deny (empty array) with error indication
-		// Requirements: 10.7 - fail-closed, deny on error
 		return denyResult(now, ceiling, denyTTL), fmt.Errorf("querying shares for VPC ARN %q: %w", sourceVpcArn, err)
 	}
 
@@ -178,7 +171,6 @@ func (h *CalloutHandler) HandleCalloutWithHeaders(ctx context.Context, sourceVpc
 	locations := []LocationEntry{}
 	var activeRecords []*model.ShareRecord
 	for _, record := range records {
-		// Compute effective status at read time (Req 2.4, 2.5, 2.6)
 		status := record.EffectiveStatus(now)
 		if status != model.ShareStatusActive {
 			continue
@@ -205,8 +197,8 @@ func (h *CalloutHandler) HandleCalloutWithHeaders(ctx context.Context, sourceVpc
 }
 
 // denyResult builds the fail-closed deny response returned when the store cannot be
-// read. The empty htsgetAuth array is the deny signal (Req 4.4, 10.7), and the short
-// negative-cache max-age keeps a backend outage from being cached for long (Req 13.2).
+// read. The empty htsgetAuth array is the deny signal, and the short
+// negative-cache max-age keeps a backend outage from being cached for long.
 func denyResult(now time.Time, ceiling, denyTTL time.Duration) *CalloutResult {
 	return &CalloutResult{
 		Response: &CalloutResponse{
@@ -227,19 +219,17 @@ func denyResult(now time.Time, ceiling, denyTTL time.Duration) *CalloutResult {
 //   - Takes min(all remaining lifetimes), then caps at ceiling
 //   - Returns "s-maxage=<seconds>, public" so a shared cache is permitted to
 //     store and reuse the response even when the callout request carries an
-//     Authorization header (RFC 9111 §3.5, Req 13.1).
+//     Authorization header (RFC 9111 §3.5).
 //
 // For deny responses (no active shares):
-//   - Returns "max-age=<denyTTL seconds>" for short negative caching (Req 13.2).
+//   - Returns "max-age=<denyTTL seconds>" for short negative caching.
 //     This uses plain max-age rather than s-maxage so the deny response is also
 //     usable by a private cache, and because the deny path carries no credentials
 //     concern.
 //
 // Where no safe lifetime can be determined (should not happen with the above
 // logic, but as a fallback):
-//   - Returns "no-store" (Req 13.4).
-//
-// Requirements: 13.1, 13.2, 13.4
+//   - Returns "no-store".
 func ComputeCacheControl(records []*model.ShareRecord, now time.Time, ceiling time.Duration, denyTTL time.Duration) string {
 	if len(records) == 0 {
 		// Deny: short max-age for negative caching (Req 13.2)
@@ -248,7 +238,7 @@ func ComputeCacheControl(records []*model.ShareRecord, now time.Time, ceiling ti
 	}
 
 	// Allow: compute min(remaining lifetime), which is already capped at the ceiling
-	// because that is the starting value (Req 13.1).
+	// because that is the starting value.
 	minRemaining := ceiling
 	for _, record := range records {
 		// An unlimited share contributes the ceiling, so it never lowers the result.
@@ -264,6 +254,6 @@ func ComputeCacheControl(records []*model.ShareRecord, now time.Time, ceiling ti
 
 	// Emit s-maxage + public so a shared cache (RFC 9111 §3.5) is explicitly
 	// permitted to store the response even when the request carries an
-	// Authorization header (Req 13.1).
+	// Authorization header.
 	return fmt.Sprintf("s-maxage=%d, public", seconds)
 }

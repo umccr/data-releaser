@@ -33,7 +33,7 @@ func NewShareStore(client internalaws.DynamoDBClient, tableName string) *ShareSt
 	}
 }
 
-// GSI index names.
+// GSI2IndexName GSI index names.
 const (
 	GSI2IndexName = "GSI2"
 )
@@ -60,7 +60,7 @@ type CreateInput struct {
 	TargetVpcArn        string
 	LibraryIDs          []string
 	S3Prefixes          []string
-	// Files records the individual resolved files for manifest generation. Optional;
+	// Files records the individual resolved files for manifest generation. Optional,
 	// it never affects authorization, which is granted by S3Prefixes.
 	Files     []model.ShareFile
 	ExpiresAt *time.Time
@@ -247,7 +247,6 @@ func (s *ShareStore) ListAll(ctx context.Context) ([]*model.ShareRecord, error) 
 // FindMatchingActiveShare queries existing active shares for the given researcherAccountID
 // and compares library ID sets (order-independent) for an exact match. If a match is found,
 // it returns the existing ShareRecord. If no match exists, it returns nil.
-// Requirements: 12.1, 12.2, 12.3, 12.4
 func (s *ShareStore) FindMatchingActiveShare(ctx context.Context, researcherAccountID string, libraryIDs []string) (*model.ShareRecord, error) {
 	shares, err := s.ListByAccount(ctx, researcherAccountID)
 	if err != nil {
@@ -272,7 +271,6 @@ func (s *ShareStore) FindMatchingActiveShare(ctx context.Context, researcherAcco
 // match is found, it returns the existing share without creating a duplicate.
 // The returned bool indicates whether an existing share was reused (true) or a new one was
 // created (false).
-// Requirements: 12.1, 12.2, 12.3, 12.4
 func (s *ShareStore) CreateIdempotent(ctx context.Context, input CreateInput) (*model.ShareRecord, bool, error) {
 	existing, err := s.FindMatchingActiveShare(ctx, input.ResearcherAccountID, input.LibraryIDs)
 	if err != nil {
