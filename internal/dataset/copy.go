@@ -185,6 +185,11 @@ type CopyRequest struct {
 	// enumeration to the copy service; see PlanCopy for why that is the default.
 	Objects []SourceObject
 
+	// InstructionsDocument is a fully-formed JSONL instruction document to use as-is,
+	// bypassing buildInstructions entirely. When set, Objects is ignored. The document
+	// must already be valid JSONL of CopyInstruction records; it is uploaded verbatim.
+	InstructionsDocument []byte
+
 	// DryRun asks the copy service to go through the motions — including checking that
 	// every source object exists and that the destination is writable — without moving
 	// any bytes.
@@ -446,13 +451,26 @@ func PlanCopy(cfg CopyConfig, req CopyRequest) (*CopyPlan, error) {
 		return nil, err
 	}
 
-	instructions, err := buildInstructions(source, req.Objects)
-	if err != nil {
-		return nil, err
-	}
-	document, err := marshalInstructions(instructions)
-	if err != nil {
-		return nil, err
+	var instructions []CopyInstruction
+	var document []byte
+	if len(req.InstructionsDocument) > 0 {
+		// Caller supplied a fully-formed document; decode it so CopyPlan.Instructions
+		// is populated, but upload the original bytes verbatim to preserve formatting.
+		instructions, err = unmarshalInstructions(req.InstructionsDocument)
+		if err != nil {
+			return nil, fmt.Errorf("parsing supplied instructions document for dataset %q: %w",
+				req.DatasetURI, err)
+		}
+		document = req.InstructionsDocument
+	} else {
+		instructions, err = buildInstructions(source, req.Objects)
+		if err != nil {
+			return nil, err
+		}
+		document, err = marshalInstructions(instructions)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// Relative to the prefix the copy service was deployed with; the upload key below
@@ -727,6 +745,41 @@ func checkObjectKey(key string, index int) (string, error) {
 		}
 	}
 	return trimmed, nil
+}
+
+// ParseInstructionsDocument parses a JSONL instruction document, returning the decoded
+// instructions. Each non-empty line must be a valid JSON object matching CopyInstruction.
+// It is the public entry point for validating a caller-supplied document before it is
+// handed to PlanCopy.
+func ParseInstructionsDocument(data []byte) ([]CopyInstruction, error) {
+	return unmarshalInstructions(data)
+}
+
+// unmarshalInstructions parses a JSONL instruction document, returning the decoded
+// instructions. Each non-empty line must be a valid JSON object matching CopyInstruction.
+// It is used when the caller supplies a pre-built document so that CopyPlan.Instructions
+// is still populated and the document can be validated before upload.
+func unmarshalInstructions(data []byte) ([]CopyInstruction, error) {
+	var instructions []CopyInstruction
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	for decoder.More() {
+		var instr CopyInstruction
+		if err := decoder.Decode(&instr); err != nil {
+			return nil, fmt.Errorf("line %d is not a valid copy instruction: %w",
+				len(instructions)+1, err)
+		}
+		if strings.TrimSpace(instr.SourceBucket) == "" {
+			return nil, fmt.Errorf("line %d: sourceBucket is required", len(instructions)+1)
+		}
+		if strings.TrimSpace(instr.SourceKey) == "" {
+			return nil, fmt.Errorf("line %d: sourceKey is required", len(instructions)+1)
+		}
+		instructions = append(instructions, instr)
+	}
+	if len(instructions) == 0 {
+		return nil, fmt.Errorf("instructions document is empty")
+	}
+	return instructions, nil
 }
 
 // marshalInstructions renders the instructions as JSONL: one compact object per line,

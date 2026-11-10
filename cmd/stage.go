@@ -83,6 +83,10 @@ func init() {
 			"copying part of it. Produce one with, for example: aws s3api list-objects-v2 "+
 			"--bucket B --prefix P/ --endpoint-url URL --query 'Contents[].Key' --output text "+
 			"| tr '\\t' '\\n'")
+	stageS3Cmd.Flags().String("instructions-from", "",
+		"Path to a pre-built INSTRUCTIONS.jsonl file to upload and use as-is, bypassing the "+
+			"automatic instruction generation. Each line must be a JSON object with at least "+
+			"sourceBucket and sourceKey fields. Cannot be combined with --objects-from.")
 	stageS3Cmd.Flags().Float64("max-cost", 0,
 		"Refuse the copy if the transfer is estimated to cost more than this many US "+
 			"dollars. Pricing the transfer takes a run of its own, so the first invocation "+
@@ -115,6 +119,10 @@ func runStageS3(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	objects, err := stageObjectList(cmd, datasetURI)
+	if err != nil {
+		return err
+	}
+	instructionsDocument, err := stageInstructionsDocument(cmd, datasetURI, objects)
 	if err != nil {
 		return err
 	}
@@ -159,11 +167,12 @@ func runStageS3(cmd *cobra.Command, args []string) error {
 	})
 
 	return stager.stage(ctx, cmd.OutOrStdout(), stageRequest{
-		datasetURI:     datasetURI,
-		hotCacheBucket: bucket,
-		objects:        objects,
-		dryRun:         dryRun,
-		maxCostUSD:     maxCost,
+		datasetURI:           datasetURI,
+		hotCacheBucket:       bucket,
+		objects:              objects,
+		instructionsDocument: instructionsDocument,
+		dryRun:               dryRun,
+		maxCostUSD:           maxCost,
 	})
 }
 
@@ -225,6 +234,42 @@ func stageObjectList(cmd *cobra.Command, datasetURI string) ([]dataset.SourceObj
 			path, datasetURI, err)
 	}
 	return objects, nil
+}
+
+// stageInstructionsDocument reads the INSTRUCTIONS.jsonl file the operator named, or
+// returns nil where none was named.
+//
+// The document is read and validated here, before any configuration is loaded or any call
+// is made. --instructions-from and --objects-from are mutually exclusive: both describe
+// what to copy, and accepting both would silently discard one.
+func stageInstructionsDocument(cmd *cobra.Command, datasetURI string, objects []dataset.SourceObject) ([]byte, error) {
+	path, err := cmd.Flags().GetString("instructions-from")
+	if err != nil {
+		return nil, fmt.Errorf("reading --instructions-from flag: %w", err)
+	}
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil, nil
+	}
+
+	if len(objects) > 0 {
+		return nil, errors.New(
+			"--instructions-from and --objects-from cannot be used together: both describe " +
+				"what to copy, and accepting both would silently discard one of them")
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading the instructions document for dataset %q: %w", datasetURI, err)
+	}
+
+	// Validate the document so the operator learns of any problem before any AWS call is
+	// made, rather than after the working bucket has been written to.
+	if _, err := dataset.ParseInstructionsDocument(data); err != nil {
+		return nil, fmt.Errorf("the instructions document in %s is not valid: %w", path, err)
+	}
+
+	return data, nil
 }
 
 // stageClients are the services staging touches, gathered so that the command's own
@@ -304,6 +349,10 @@ type stageRequest struct {
 	// to.
 	objects []dataset.SourceObject
 
+	// instructionsDocument is a fully-formed JSONL instruction document supplied by the
+	// operator. When set, objects is ignored and instruction-building is bypassed.
+	instructionsDocument []byte
+
 	// dryRun checks both ends and prices the transfer without moving any bytes.
 	dryRun bool
 
@@ -337,12 +386,13 @@ func (s *stager) stage(ctx context.Context, out io.Writer, req stageRequest) err
 	}
 
 	submission := dataset.SubmitRequest{
-		DatasetURI:        req.datasetURI,
-		DestinationBucket: req.hotCacheBucket,
-		KeyArn:            keyArn,
-		Objects:           req.objects,
-		DryRun:            req.dryRun,
-		MaxCostUSD:        req.maxCostUSD,
+		DatasetURI:           req.datasetURI,
+		DestinationBucket:    req.hotCacheBucket,
+		KeyArn:               keyArn,
+		Objects:              req.objects,
+		InstructionsDocument: req.instructionsDocument,
+		DryRun:               req.dryRun,
+		MaxCostUSD:           req.maxCostUSD,
 	}
 
 	if req.maxCostUSD != nil {
@@ -431,11 +481,12 @@ func (s *stager) priceTransfer(ctx context.Context, req stageRequest, keyArn str
 	// and then copied from a list would estimate a different transfer from the one the
 	// ceiling is meant to gate.
 	priced, err := s.submitter.Submit(ctx, dataset.SubmitRequest{
-		DatasetURI:        req.datasetURI,
-		DestinationBucket: req.hotCacheBucket,
-		KeyArn:            keyArn,
-		Objects:           req.objects,
-		DryRun:            true,
+		DatasetURI:           req.datasetURI,
+		DestinationBucket:    req.hotCacheBucket,
+		KeyArn:               keyArn,
+		Objects:              req.objects,
+		InstructionsDocument: req.instructionsDocument,
+		DryRun:               true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf(
