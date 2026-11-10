@@ -1,6 +1,7 @@
-// Package validate - canary test-setup mode for end-to-end validation. Creates a short-lived synthetic Share_Record
-// for the configured canary library, invokes the Test_Lambda to confirm canary data
-// is retrievable end-to-end, and cleans up the synthetic share on exit (best-effort).
+// Package validate - canary test-setup mode for end-to-end validation. Creates a
+// short-lived synthetic share record for the configured canary library, invokes the
+// test lambda to confirm canary data is retrievable end-to-end, and cleans up the
+// synthetic share on exit (best-effort).
 package validate
 
 import (
@@ -32,27 +33,27 @@ type CanaryOpts struct {
 	TargetVpcArn string
 }
 
-// testLambdaResponse represents the expected response from the Test_Lambda, shared by
+// testLambdaResponse represents the expected response from the test lambda, shared by
 // the canary test-setup invocation and the researcher-side invocation check.
 type testLambdaResponse struct {
 	StatusCode      int             `json:"statusCode"`
 	LatticeResponse json.RawMessage `json:"latticeResponse"`
 }
 
-// validateTestLambdaResponse reports whether a Test_Lambda response indicates a
+// validateTestLambdaResponse reports whether a test lambda response indicates a
 // successful end-to-end fetch. The returned reason is empty when ok is true.
 func validateTestLambdaResponse(resp testLambdaResponse) (ok bool, reason string) {
 	if resp.StatusCode != 200 {
-		return false, fmt.Sprintf("Test_Lambda returned statusCode %d (expected 200)", resp.StatusCode)
+		return false, fmt.Sprintf("test lambda returned statusCode %d (expected 200)", resp.StatusCode)
 	}
 	if len(resp.LatticeResponse) == 0 || string(resp.LatticeResponse) == "null" {
-		return false, "Test_Lambda returned statusCode 200 but latticeResponse is missing or empty"
+		return false, "test lambda returned statusCode 200 but latticeResponse is missing or empty"
 	}
 	return true, ""
 }
 
 // RunCanaryTest creates a short-lived synthetic ShareRecord for the configured canary
-// library, invokes the Test_Lambda to confirm canary data is retrievable end-to-end,
+// library, invokes the test lambda to confirm canary data is retrievable end-to-end,
 // and always cleans up the synthetic share (including on error, best-effort).
 // Returns a Check indicating success/failure of the simulated share path.
 func RunCanaryTest(ctx context.Context, opts CanaryOpts) Check {
@@ -66,7 +67,7 @@ func RunCanaryTest(ctx context.Context, opts CanaryOpts) Check {
 		return fail(name, "canary libraryId and account are required in configuration")
 	}
 
-	// Step 1: Create a short-lived synthetic Share_Record (5 min expiry).
+	// Step 1: Create a short-lived synthetic share record (5 min expiry).
 	//
 	// The synthetic share must be shaped exactly like a real one, or the canary
 	// validates a path production never takes. Both fields below were previously built
@@ -101,20 +102,20 @@ func RunCanaryTest(ctx context.Context, opts CanaryOpts) Check {
 		_, _ = opts.ShareStore.Revoke(ctx, record.ShareID)
 	}()
 
-	// Step 2: Discover the Test_Lambda in the canary account. It is required here —
+	// Step 2: Discover the test lambda in the canary account. It is required here —
 	// without it there is no way to confirm the share path end to end.
 	testLambdaName, err := discoverTestLambda(ctx, opts.LambdaClient)
 	if err != nil {
-		return fail(name, "failed to discover Test_Lambda: %v", err)
+		return fail(name, "failed to discover test lambda: %v", err)
 	}
 	if testLambdaName == "" {
-		return fail(name, "failed to discover Test_Lambda: %v", errNoTestLambda)
+		return fail(name, "failed to discover test lambda: %v", errNoTestLambda)
 	}
 
-	// Step 3: Invoke the Test_Lambda with the canary library ID
+	// Step 3: Invoke the test lambda with the canary library ID
 	resp, err := invokeCanaryTestLambda(ctx, opts.LambdaClient, testLambdaName, opts.Config.LibraryID)
 	if err != nil {
-		return fail(name, "failed to invoke Test_Lambda: %v", err)
+		return fail(name, "failed to invoke test lambda: %v", err)
 	}
 
 	// Step 4: Validate the response
@@ -125,14 +126,14 @@ func RunCanaryTest(ctx context.Context, opts CanaryOpts) Check {
 	return pass(name)
 }
 
-// testLambdaNameFragment is the substring identifying the Test_Lambda deployed by the
+// testLambdaNameFragment is the substring identifying the test lambda deployed by the
 // consumer construct's deployTestLambda option. Matched case-insensitively, since the
 // deployed physical name carries a CDK-generated suffix and casing is not guaranteed.
 const testLambdaNameFragment = "testlambda"
 
-// discoverTestLambda finds the Test_Lambda function in the target account, paging
+// discoverTestLambda finds the test lambda in the target account, paging
 // through ListFunctions. It returns ("", nil) when no such function exists: absence is
-// not an error here, because the Test_Lambda is optional and each caller reports it
+// not an error here, because the test lambda is optional and each caller reports it
 // differently (the canary treats it as fatal, researcher-side validation as
 // UNAVAILABLE).
 func discoverTestLambda(ctx context.Context, client internalaws.LambdaClient) (string, error) {
@@ -152,10 +153,10 @@ func discoverTestLambda(ctx context.Context, client internalaws.LambdaClient) (s
 	return "", nil
 }
 
-// errNoTestLambda reports that the optional Test_Lambda is not deployed.
+// errNoTestLambda reports that the optional test lambda is not deployed.
 var errNoTestLambda = fmt.Errorf("no Lambda function containing 'TestLambda' found; deploy it via the consumer construct's deployTestLambda option")
 
-// invokeCanaryTestLambda invokes the Test_Lambda with a request for the canary library ID
+// invokeCanaryTestLambda invokes the test lambda with a request for the canary library ID
 // and parses the response.
 func invokeCanaryTestLambda(ctx context.Context, client internalaws.LambdaClient, functionName string, libraryID string) (*testLambdaResponse, error) {
 	// Build the payload: request the canary library's reads endpoint
@@ -164,7 +165,7 @@ func invokeCanaryTestLambda(ctx context.Context, client internalaws.LambdaClient
 	}
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
-		return nil, fmt.Errorf("marshaling Test_Lambda payload: %w", err)
+		return nil, fmt.Errorf("marshaling test lambda payload: %w", err)
 	}
 
 	output, err := client.Invoke(ctx, &lambda.InvokeInput{
@@ -173,20 +174,20 @@ func invokeCanaryTestLambda(ctx context.Context, client internalaws.LambdaClient
 		InvocationType: lambdatypes.InvocationTypeRequestResponse,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("invoking Test_Lambda %q: %w", functionName, err)
+		return nil, fmt.Errorf("invoking test lambda %q: %w", functionName, err)
 	}
 
 	if output.FunctionError != nil && *output.FunctionError != "" {
-		return nil, fmt.Errorf("Test_Lambda execution error: %s", *output.FunctionError)
+		return nil, fmt.Errorf("test lambda execution error: %s", *output.FunctionError)
 	}
 
 	if output.Payload == nil {
-		return nil, fmt.Errorf("Test_Lambda returned nil payload")
+		return nil, fmt.Errorf("test lambda returned nil payload")
 	}
 
 	var resp testLambdaResponse
 	if err := json.Unmarshal(output.Payload, &resp); err != nil {
-		return nil, fmt.Errorf("parsing Test_Lambda response: %w (payload: %s)", err, string(output.Payload))
+		return nil, fmt.Errorf("parsing test lambda response: %w (payload: %s)", err, string(output.Payload))
 	}
 
 	return &resp, nil

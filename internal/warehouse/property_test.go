@@ -13,7 +13,7 @@ import (
 // At the
 // warehouse-resolution stage: for any combination of no-shareable-reads (missing)
 // and archived libraries in the input, ValidateResolution reports an error, so
-// the share pipeline aborts before any Share_Record is created. When every
+// the share pipeline aborts before any share record is created. When every
 // requested library resolves to a non-archived row, validation passes.
 //
 // The end-to-end pipeline half lives in

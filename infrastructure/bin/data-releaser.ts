@@ -3,6 +3,7 @@ import * as path from "path";
 import * as cdk from "aws-cdk-lib";
 import { DataReleaserStack } from "../lib/data-releaser-stack";
 import { DataShareTestStack } from "../lib/data-share-test-stack";
+import { DatasetConfig, hotCacheStacks, resolveBucketNameHashKey } from "../lib/hot-cache-stacks";
 import { MockMartObject, MockMartStack } from "../lib/mock-mart-stack";
 import { dataShareTestBucketName, TEST_DATA_OBJECTS } from "../lib/test-data";
 
@@ -24,6 +25,17 @@ interface DataReleaserContext {
   readonly cacheTtlCeiling?: string;
   readonly cacheDenyTtl?: string;
   readonly provisionOperatorPolicy?: boolean;
+  readonly datasets?: DatasetConfig[];
+  readonly copyWriterRoleName?: string;
+  readonly copyWriterRoleAccount?: string;
+  readonly copyStateMachineArn?: string;
+  readonly copyWorkingBucketName?: string;
+  readonly custodianRoleArn?: string;
+  readonly obscureBucketNames?: boolean;
+  readonly dataRetentionDays?: number;
+  readonly keyPendingWindowDays?: number;
+  readonly logObjectAccess?: boolean;
+  readonly accessLogsBucketName?: string;
   readonly dataShareTest?: boolean;
   readonly mockMart?: boolean;
   readonly mockMartDatabase?: string;
@@ -52,8 +64,32 @@ new DataReleaserStack(app, "DataReleaserStack", {
   cacheDenyTtl: cfg.cacheDenyTtl ?? "60s",
   provisionOperatorPolicy: cfg.provisionOperatorPolicy ?? false,
   apiVpcId,
+  // Both belong to the separately deployed copy orchestration. Given, the stack
+  // also deploys the function recording a finished dataset copy.
+  copyStateMachineArn: cfg.copyStateMachineArn,
+  copyWorkingBucketName: cfg.copyWorkingBucketName,
   description:
     "Data Releaser Authorization Service resources in the Data Control account.",
+});
+
+// One bucket and one key per released dataset, each in a stack of its own so
+// that destroying one dataset's copy cannot reach another's.
+const datasets = cfg.datasets ?? [];
+hotCacheStacks(app, {
+  env: { account, region },
+  namePrefix,
+  datasets,
+  copyWriterRoleName: cfg.copyWriterRoleName,
+  copyWriterRoleAccount: cfg.copyWriterRoleAccount,
+  custodianRoleArn: cfg.custodianRoleArn,
+  bucketNameHashKey:
+    datasets.length > 0
+      ? resolveBucketNameHashKey(cfg.obscureBucketNames ?? false, process.env)
+      : undefined,
+  dataRetentionDays: cfg.dataRetentionDays,
+  keyPendingWindowDays: cfg.keyPendingWindowDays,
+  logObjectAccess: cfg.logObjectAccess,
+  accessLogsBucketName: cfg.accessLogsBucketName,
 });
 
 // Configure test data.
@@ -78,7 +114,8 @@ if (cfg.mockMart ?? false) {
     dataBucketName: cfg.mockMartDataBucket ?? testBucketName,
     cohortId: cfg.mockMartCohortId ?? "DEMO",
     objects: cfg.mockMartObjects ?? TEST_DATA_OBJECTS,
-    description: "Mock OrcaVault Mart for Data Releaser demos (not part of Req 16).",
+    description:
+      "Mock OrcaVault Mart for Data Releaser demos; stands in for the warehouse and is never deployed beside it.",
   });
 }
 

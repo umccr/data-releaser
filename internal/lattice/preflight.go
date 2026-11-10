@@ -9,7 +9,7 @@ import (
 )
 
 // Preflight runs the connectivity preflight check that MUST be called as the first
-// step of the share flow, before any Athena query or Share_Record creation.
+// step of the share flow, before any Athena query or share record creation.
 //
 // It verifies that the researcher account has an active VPC Lattice service network
 // association via AWS RAM. If this check fails, the share command must refuse to

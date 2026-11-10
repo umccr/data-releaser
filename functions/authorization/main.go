@@ -8,7 +8,7 @@
 //
 // Environment variables (read once at cold start):
 //
-//	SHARE_RECORDS_TABLE_NAME  (required) DynamoDB table holding Share_Records.
+//	SHARE_RECORDS_TABLE_NAME  (required) DynamoDB table holding share records.
 //	CACHE_TTL_CEILING         (optional) max-age ceiling as a Go duration, e.g. "1h".
 //	                          Default 1h. Caps the allow Cache-Control.
 //	CACHE_DENY_TTL            (optional) negative-cache max-age as a Go duration,

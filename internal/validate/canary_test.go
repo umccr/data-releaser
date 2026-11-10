@@ -16,7 +16,7 @@ import (
 	"github.com/umccr/data-releaser/internal/testgen"
 )
 
-// testLambdaLister returns a Lambda mock that reports a single deployed Test_Lambda.
+// testLambdaLister returns a Lambda mock that reports a single deployed test lambda.
 func testLambdaLister(invoke func(ctx context.Context, params *lambda.InvokeInput) (*lambda.InvokeOutput, error)) *stubLambdaClient {
 	return &stubLambdaClient{
 		listFunctionsFn: func(ctx context.Context, params *lambda.ListFunctionsInput) (*lambda.ListFunctionsOutput, error) {
@@ -128,7 +128,7 @@ func TestRunCanaryTest_HappyPathAndCleanup(t *testing.T) {
 		t.Fatalf("expected canary test to pass, got failure: %s", check.Error)
 	}
 
-	// The synthetic share must be cleaned up (revoked) after the run (Req 15.8).
+	// The synthetic share must be cleaned up (revoked) after the run.
 	if len(ddb.Items) != 1 {
 		t.Fatalf("expected exactly 1 synthetic share record, got %d", len(ddb.Items))
 	}
@@ -138,7 +138,7 @@ func TestRunCanaryTest_HappyPathAndCleanup(t *testing.T) {
 }
 
 // TestRunCanaryTest_CleanupOnError verifies the synthetic share is still cleaned up when
-// the end-to-end invocation fails (Req 15.8 — cleanup on error, best-effort).
+// the end-to-end invocation fails, since cleanup is best-effort but unconditional.
 func TestRunCanaryTest_CleanupOnError(t *testing.T) {
 	ddb := awstest.NewDynamoDB()
 	lambdaClient := testLambdaLister(func(ctx context.Context, params *lambda.InvokeInput) (*lambda.InvokeOutput, error) {
@@ -154,7 +154,7 @@ func TestRunCanaryTest_CleanupOnError(t *testing.T) {
 
 	check := RunCanaryTest(context.Background(), opts)
 	if check.Passed {
-		t.Fatal("expected canary test to fail when Test_Lambda invocation errors")
+		t.Fatal("expected canary test to fail when test lambda invocation errors")
 	}
 
 	if len(ddb.Items) != 1 {
@@ -166,7 +166,7 @@ func TestRunCanaryTest_CleanupOnError(t *testing.T) {
 }
 
 // TestDiscoverTestLambda covers the three outcomes callers distinguish, including a
-// Test_Lambda that only appears on a later ListFunctions page.
+// test lambda that only appears on a later ListFunctions page.
 func TestDiscoverTestLambda(t *testing.T) {
 	page := func(marker *string, names ...string) *lambda.ListFunctionsOutput {
 		out := &lambda.ListFunctionsOutput{NextMarker: marker}
@@ -198,7 +198,7 @@ func TestDiscoverTestLambda(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if name != "data-releaser-testlambda-A1B2C3" {
-			t.Errorf("expected the Test_Lambda from page 2, got %q", name)
+			t.Errorf("expected the test lambda from page 2, got %q", name)
 		}
 		if calls != 2 {
 			t.Errorf("expected 2 pages to be walked, got %d", calls)

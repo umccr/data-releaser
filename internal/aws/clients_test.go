@@ -119,6 +119,12 @@ func TestNewClientFactory_ReturnsClients(t *testing.T) {
 	if factory.S3Client() == nil {
 		t.Error("S3Client() returned nil")
 	}
+	if factory.KMSClient() == nil {
+		t.Error("KMSClient() returned nil")
+	}
+	if factory.StepFunctionsClient() == nil {
+		t.Error("StepFunctionsClient() returned nil")
+	}
 	if factory.LambdaClient() == nil {
 		t.Error("LambdaClient() returned nil")
 	}

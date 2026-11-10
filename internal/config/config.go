@@ -1,190 +1,86 @@
-// Package config handles loading and validating the Data Releaser configuration
-// from YAML files and CLI flag overrides.
+// Package config loads the Data Releaser configuration from a YAML file and CLI flag
+// overrides.
+//
+// The file is divided into sections, and the sections are divided by which release
+// mechanism reads them. Loading parses and applies defaults but validates nothing:
+// there is no set of fields every command needs, and a single global check meant that
+// an S3 command could not start until the htsget warehouse and endpoints were
+// configured, even though neither means anything to it.
+//
+// Each command instead names the sections it actually uses and validates only those,
+// through Require. That keeps a missing field reported against the command that needs
+// it, and keeps one mechanism's configuration from blocking the other's.
 package config
 
 import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
-
-	"github.com/umccr/data-releaser/internal/model"
 )
 
 // Config represents the full application configuration.
+//
+// Grouping follows which mechanism reads a section, because that is what determines
+// whether a given command has to care about it. The shared sections are the ones both
+// mechanisms genuinely have in common: the account the resources live in, the record
+// store, and the bucket researcher manifests are delivered through.
 type Config struct {
-	Profile       string              `yaml:"profile"`
-	Warehouse     WarehouseConfig     `yaml:"warehouse"`
-	Endpoints     EndpointsConfig     `yaml:"endpoints"`
-	Cache         CacheConfig         `yaml:"cache"`
-	Validation    ValidationConfig    `yaml:"validation"`
-	Manifest      ManifestConfig      `yaml:"manifest"`
-	Authorization AuthorizationConfig `yaml:"authorization"`
+	// Profile names an AWS profile or credential source the SDK understands. Empty
+	// leaves the default credential chain in place.
+	Profile string `yaml:"profile"`
+
+	// Account owns every resource this tool writes to — the ledger table, the manifest
+	// bucket, the cache buckets and their keys. It is written into the policy documents
+	// as a principal, so it has to be the account id rather than an alias.
+	Account string `yaml:"account"`
+
+	// Region is where those resources live. It appears in the dataset key policy as the
+	// condition confining a researcher's decrypt permission to S3 in one region, so a
+	// wrong value here denies every read rather than failing visibly.
+	Region string `yaml:"region"`
+
+	// Ledger locates the record store. Both mechanisms write to it.
+	Ledger LedgerConfig `yaml:"ledger"`
+
+	// Manifest is the bucket researcher manifests are delivered through, shared by both
+	// mechanisms, together with the key template for the htsget document. The dataset
+	// document has its own template under s3.manifest, since the two describe different
+	// kinds of access and a researcher may hold both.
+	Manifest ManifestConfig `yaml:"manifest"`
+
+	// Warehouse, Endpoints, Cache, Researchers and Validation belong to the htsget
+	// mechanism.
+	Warehouse WarehouseConfig `yaml:"warehouse"`
+	Endpoints EndpointsConfig `yaml:"endpoints"`
+	Cache     CacheConfig     `yaml:"cache"`
 	// Researchers maps a researcher AWS account ID to its per-account settings.
 	Researchers map[string]ResearcherConfig `yaml:"researchers"`
+	Validation  ValidationConfig            `yaml:"validation"`
+
+	// S3 belongs to the mechanism that copies a dataset into this account and grants a
+	// researcher direct read access to that copy.
+	S3 S3Config `yaml:"s3"`
 }
 
-// AuthorizationConfig holds settings for the Authorization Service's store.
-type AuthorizationConfig struct {
-	// ShareRecordsTable is the DynamoDB table holding Share_Records. The
-	// Infrastructure_Stack creates it as "<namePrefix>-ShareRecords", so this must be
-	// sourced from that stack's output rather than hard-coded. Defaults to
-	// DefaultShareRecordsTable, which matches the stack's default name prefix.
-	ShareRecordsTable string `yaml:"shareRecordsTable"`
+// LedgerConfig locates the record store both mechanisms write to.
+//
+// One table holds the records of both, discriminated by mechanism, so that "what does
+// this account have access to?" has a single answer. It is created by the deployment as
+// "<namePrefix>-ShareRecords", so the name belongs in configuration sourced from that
+// deployment's output rather than compiled in.
+type LedgerConfig struct {
+	// Table is the DynamoDB table holding the records. Defaults to DefaultLedgerTable,
+	// which matches the deployment's default name prefix.
+	Table string `yaml:"table"`
 }
 
-// DefaultShareRecordsTable is the Share_Records table name produced by the
-// Infrastructure_Stack under its default "data-releaser" name prefix.
-const DefaultShareRecordsTable = "data-releaser-ShareRecords"
-
-// ResearcherConfig holds the per-account settings for one Researcher_Account.
-type ResearcherConfig struct {
-	// TargetVpcArn is the ARN of the researcher VPC that is associated with the
-	// htsget VPC Lattice service network.
-	//
-	// This is the identity the authorization callout is keyed on, and it must be the
-	// value htsget-rs actually forwards. VPC Lattice puts the *EC2 VPC* ARN of the
-	// calling VPC on the invocation event
-	// (`$.requestContext.identity.sourceVpcArn`), so the form is
-	// "arn:aws:ec2:<region>:<account>:vpc/vpc-<id>" — not a vpc-lattice ARN. The
-	// authorization lookup is an exact-match query on a DynamoDB GSI, so any other
-	// value silently denies every request.
-	TargetVpcArn string `yaml:"targetVpcArn"`
-}
-
-// ResolveTargetVpcArn returns the configured target VPC ARN for a researcher account.
-// It returns an error when the account has no entry, because there is no safe value to
-// fall back to: a guessed ARN would never match a real request.
-func (cfg *Config) ResolveTargetVpcArn(accountID string) (string, error) {
-	researcher, ok := cfg.Researchers[accountID]
-	if !ok || strings.TrimSpace(researcher.TargetVpcArn) == "" {
-		return "", fmt.Errorf(
-			"no target VPC ARN configured for researcher account %s; add it under "+
-				"researchers.%s.targetVpcArn in the config file, or pass --target-vpc-arn. "+
-				"It is the ARN of the researcher VPC associated with the htsget VPC Lattice "+
-				"service network, e.g. arn:aws:ec2:ap-southeast-2:%s:vpc/vpc-0123456789abcdef0",
-			accountID, accountID, accountID)
-	}
-
-	arn := strings.TrimSpace(researcher.TargetVpcArn)
-	if err := model.ValidateTargetVpcArn(arn, accountID); err != nil {
-		return "", fmt.Errorf("researchers.%s.targetVpcArn: %w", accountID, err)
-	}
-	return arn, nil
-}
-
-// ManifestConfig holds the Manifest_Bucket settings. The bucket is a single
-// same-account Data Control bucket (sourced from an Infrastructure_Stack output);
-// each Researcher_Account's manifest lives under a per-account key prefix.
-type ManifestConfig struct {
-	// Bucket is the Data Control Manifest_Bucket name.
-	Bucket string `yaml:"bucket"`
-	// KeyTemplate is the per-account object key template. It supports the
-	// {accountId} placeholder and defaults to DefaultManifestKeyTemplate.
-	KeyTemplate string `yaml:"keyTemplate"`
-}
-
-// DefaultManifestKeyTemplate is the default per-account manifest key template.
-const DefaultManifestKeyTemplate = "manifests/{accountId}/manifest.json"
-
-// manifestPlaceholderRe matches {...} placeholder tokens in a key template.
-var manifestPlaceholderRe = regexp.MustCompile(`\{[^}]*\}`)
-
-// RenderManifestKey renders the manifest key template for the given account ID by
-// substituting the {accountId} placeholder. Any other {...} token is rejected with
-// a descriptive error so misconfigured templates fail fast.
-func (m ManifestConfig) RenderManifestKey(accountID string) (string, error) {
-	var rerr error
-	rendered := manifestPlaceholderRe.ReplaceAllStringFunc(m.KeyTemplate, func(token string) string {
-		name := strings.TrimSuffix(strings.TrimPrefix(token, "{"), "}")
-		switch name {
-		case "accountId":
-			return accountID
-		default:
-			if rerr == nil {
-				rerr = fmt.Errorf("unknown placeholder %q in manifest.keyTemplate %q (only {accountId} is supported)", token, m.KeyTemplate)
-			}
-			return token
-		}
-	})
-	if rerr != nil {
-		return "", rerr
-	}
-	return rendered, nil
-}
-
-// RenderManifestPrefix renders the per-account manifest key prefix (the directory
-// portion of the rendered key with a trailing "*"), for example
-// "manifests/<accountId>/*". Used to describe the researcher's cross-account read scope.
-func (m ManifestConfig) RenderManifestPrefix(accountID string) (string, error) {
-	key, err := m.RenderManifestKey(accountID)
-	if err != nil {
-		return "", err
-	}
-	if idx := strings.LastIndex(key, "/"); idx >= 0 {
-		return key[:idx+1] + "*", nil
-	}
-	return "*", nil
-}
-
-// WarehouseConfig holds OrcaVault Mart (Athena/Lake Formation) settings.
-type WarehouseConfig struct {
-	AthenaWorkgroup string `yaml:"athenaWorkgroup"`
-	Database        string `yaml:"database"`
-	Catalog         string `yaml:"catalog"`
-}
-
-// EndpointsConfig holds service endpoint URLs.
-type EndpointsConfig struct {
-	Authorization string `yaml:"authorization"`
-	HtsgetBaseURL string `yaml:"htsgetBaseUrl"`
-	// APIGatewayRestAPIID is the REST API ID for the Authorization Service API Gateway.
-	// Used by the `validate` command's API Gateway stage check.
-	APIGatewayRestAPIID string `yaml:"apiGatewayRestApiId"`
-	// APIGatewayStageName is the stage name for the Authorization Service API Gateway.
-	// Used by the `validate` command's API Gateway stage check. Defaults to "prod".
-	APIGatewayStageName string `yaml:"apiGatewayStageName"`
-}
-
-// CacheConfig holds cache TTL settings for the authorization response.
-type CacheConfig struct {
-	TTLCeiling Duration `yaml:"ttlCeiling"`
-	DenyTTL    Duration `yaml:"denyTtl"`
-}
-
-// ValidationConfig holds optional validation/canary settings.
-type ValidationConfig struct {
-	Canary *CanaryConfig `yaml:"canary"`
-
-	// SkipHtsgetCheck disables the direct htsget-rs /service-info health check.
-	//
-	// Set this when htsget-rs is fronted by VPC Lattice: its domain only resolves from
-	// inside an associated VPC, so the check fails from an operator's machine even
-	// though the deployment is healthy. Verify htsget-rs from inside the consumer VPC
-	// instead.
-	SkipHtsgetCheck bool `yaml:"skipHtsgetCheck"`
-
-	// SkipAuthorizationCheck disables the Authorization Service reachability probe.
-	//
-	// Set this when the authorization API is deployed as a private API Gateway
-	// endpoint (the default): it is served by an interface endpoint inside the data
-	// account VPC, so its hostname does not resolve from an operator's machine and
-	// the resource policy denies anything arriving another way. The check would fail
-	// on a healthy deployment. Verify the callout from inside that VPC instead.
-	SkipAuthorizationCheck bool `yaml:"skipAuthorizationCheck"`
-}
-
-// CanaryConfig holds the canary dataset reference for test-setup mode.
-type CanaryConfig struct {
-	LibraryID string `yaml:"libraryId"`
-	Account   string `yaml:"account"`
-	Bucket    string `yaml:"bucket"`
-	Key       string `yaml:"key"`
-}
+// DefaultLedgerTable is the record table name produced by the deployment under its
+// default "data-releaser" name prefix.
+const DefaultLedgerTable = "data-releaser-ShareRecords"
 
 // Duration is a time.Duration that supports YAML unmarshaling from strings like "1h", "60s".
 type Duration struct {
@@ -211,14 +107,12 @@ func (d Duration) MarshalYAML() (any, error) {
 	return d.Duration.String(), nil
 }
 
-// DefaultCacheTTLCeiling is the default max-age ceiling for authorization responses.
-const DefaultCacheTTLCeiling = 1 * time.Hour
-
-// DefaultCacheDenyTTL is the default negative-cache TTL for deny responses.
-const DefaultCacheDenyTTL = 60 * time.Second
-
-// Load reads configuration from the specified file path, applies defaults, and validates
-// required fields. If configPath is empty, it searches default locations.
+// Load reads configuration from the specified file path and applies defaults. If
+// configPath is empty, it searches default locations.
+//
+// Nothing is validated here beyond the file parsing, because which fields are required
+// depends entirely on the command being run. Callers state their own requirements with
+// Require.
 func Load(configPath string) (*Config, error) {
 	path, err := resolveConfigPath(configPath)
 	if err != nil {
@@ -236,10 +130,6 @@ func Load(configPath string) (*Config, error) {
 	}
 
 	applyDefaults(cfg)
-
-	if err := validate(cfg); err != nil {
-		return nil, err
-	}
 
 	return cfg, nil
 }
@@ -289,51 +179,21 @@ func applyDefaults(cfg *Config) {
 	if cfg.Manifest.KeyTemplate == "" {
 		cfg.Manifest.KeyTemplate = DefaultManifestKeyTemplate
 	}
-	if cfg.Authorization.ShareRecordsTable == "" {
-		cfg.Authorization.ShareRecordsTable = DefaultShareRecordsTable
-	}
-}
-
-// validate checks that all required fields are present and valid.
-func validate(cfg *Config) error {
-	var errs []string
-
-	if cfg.Warehouse.AthenaWorkgroup == "" {
-		errs = append(errs, "warehouse.athenaWorkgroup is required")
-	}
-	if cfg.Warehouse.Database == "" {
-		errs = append(errs, "warehouse.database is required")
-	}
-	if cfg.Endpoints.Authorization == "" {
-		errs = append(errs, "endpoints.authorization is required")
-	}
-	if cfg.Endpoints.HtsgetBaseURL == "" {
-		errs = append(errs, "endpoints.htsgetBaseUrl is required")
+	if cfg.Ledger.Table == "" {
+		cfg.Ledger.Table = DefaultLedgerTable
 	}
 
-	// Validate the manifest key template renders and rejects unknown placeholders.
-	if _, err := cfg.Manifest.RenderManifestKey("000000000000"); err != nil {
-		errs = append(errs, err.Error())
+	if cfg.S3.HotCache.NamePrefix == "" {
+		cfg.S3.HotCache.NamePrefix = DefaultHotCacheNamePrefix
 	}
-
-	// Reject malformed researcher VPC ARNs up front. These are only read at share time,
-	// and a bad value there fails silently at request time rather than loudly at write
-	// time, so it is worth catching whenever the config is loaded.
-	for accountID, researcher := range cfg.Researchers {
-		arn := strings.TrimSpace(researcher.TargetVpcArn)
-		if arn == "" {
-			errs = append(errs, fmt.Sprintf("researchers.%s.targetVpcArn is required", accountID))
-			continue
-		}
-		if err := model.ValidateTargetVpcArn(arn, accountID); err != nil {
-			errs = append(errs, fmt.Sprintf("researchers.%s.targetVpcArn: %v", accountID, err))
-		}
+	if cfg.S3.Manifest.KeyTemplate == "" {
+		cfg.S3.Manifest.KeyTemplate = DefaultDatasetManifestKeyTemplate
 	}
-
-	if len(errs) > 0 {
-		return &ValidationError{Errors: errs}
+	// The two mechanisms' manifests share a bucket by default and differ only in their
+	// key prefix, so a deployment that names one bucket does not have to name it twice.
+	if cfg.S3.Manifest.Bucket == "" {
+		cfg.S3.Manifest.Bucket = cfg.Manifest.Bucket
 	}
-	return nil
 }
 
 // ValidationError collects multiple config validation failures.

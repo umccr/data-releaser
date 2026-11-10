@@ -80,7 +80,7 @@ func parseMaxAge(t *rapid.T, cacheControl string) int64 {
 	return secs
 }
 
-// no data is served unless an active, non-expired, non-revoked Share_Record authorizes
+// no data is served unless an active, non-expired, non-revoked share record authorizes
 // the request; any error, malformed response, or absent record yields denial, never access.
 func TestFailClosed(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
@@ -153,9 +153,9 @@ func TestFailClosed(t *testing.T) {
 	})
 }
 
-// An authorization decision is never shared across Researcher_Accounts. The callout keys on the
-// requester identity (targetVpcArn / GSI1), so one researcher can never receive
-// another's locations.
+// An authorization decision is never shared across researcher accounts. The callout
+// keys on the requester identity (targetVpcArn / GSI1), so one researcher can never
+// receive another's locations.
 func TestPerResearcherIsolation(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		now := time.Now().UTC()
@@ -292,7 +292,7 @@ func TestCachesNeverWidenAccess(t *testing.T) {
 }
 
 // Failures at the preflight, resolution, or archived-file stages leave
-// no Share_Record persisted. This drives the real warehouse.ValidateResolution
+// no share record persisted. This drives the real warehouse.ValidateResolution
 // logic within the same preflight -> resolve -> validate -> create ordering the
 // share command uses, and asserts nothing is written on any failure path.
 func TestNoPartialShareEndToEnd(t *testing.T) {
@@ -376,7 +376,7 @@ func buildResolution(t *rapid.T, requested []string) ([]model.ResolvedLibrary, b
 
 // runSharePipeline mirrors the ordering of cmd/share.go: connectivity preflight,
 // then library resolution, then resolution validation, and only then the
-// Share_Record write. Any earlier failure returns before a record is created.
+// share record write. Any earlier failure returns before a record is created.
 func runSharePipeline(ctx context.Context, store *ShareStore, account, vpcArn string, requested []string, resolved []model.ResolvedLibrary, preflightOK bool) (*model.ShareRecord, error) {
 	// Stage 1: connectivity / bucket preflight.
 	if !preflightOK {
@@ -389,7 +389,7 @@ func runSharePipeline(ctx context.Context, store *ShareStore, account, vpcArn st
 	}
 	prefixes := warehouse.ExtractPrefixes(resolved)
 
-	// Stage 4: persist the Share_Record (only reached when all stages passed).
+	// Stage 4: persist the share record (only reached when all stages passed).
 	rec, _, err := store.CreateIdempotent(ctx, CreateInput{
 		ResearcherAccountID: account,
 		TargetVpcArn:        vpcArn,

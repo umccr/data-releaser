@@ -1,5 +1,5 @@
 // Package testgen provides shared property-based-test generators built on
-// pgregory.net/rapid. The generators produce Share_Records (valid and edge
+// pgregory.net/rapid. The generators produce share records (valid and edge
 // cases: expired, revoked, unlimited/no-expiry, empty s3Prefixes), VPC ARNs /
 // requester identities, and operation sequences (create/revoke/extend/expiry)
 // over a set of shares.
@@ -31,7 +31,7 @@ func VPCArn(t *rapid.T) string {
 
 // VPCArnForAccount builds an EC2 VPC ARN for the given account ID, matching the
 // shape VPC Lattice reports on the invocation event as
-// `$.requestContext.identity.sourceVpcArn` and therefore the shape a Share_Record's
+// `$.requestContext.identity.sourceVpcArn` and therefore the shape a share record's
 // targetVpcArn must have to ever match a callout.
 func VPCArnForAccount(accountID string) string {
 	return fmt.Sprintf("arn:aws:ec2:ap-southeast-2:%s:vpc/vpc-%012x", accountID, hashAccount(accountID))
@@ -78,7 +78,7 @@ func LibraryIDs(t *rapid.T) []string {
 }
 
 // S3Prefixes generates 0..3 unique S3 prefixes in the form the production path
-// actually produces. Zero prefixes is a deliberate edge case (a Share_Record with an
+// actually produces. Zero prefixes is a deliberate edge case (a share record with an
 // empty s3Prefixes set).
 //
 // The prefixes are bucket-less key prefixes with a trailing slash, e.g.
@@ -97,7 +97,7 @@ func S3Prefixes(t *rapid.T) []string {
 	).Draw(t, "s3Prefixes")
 }
 
-// ShareKind enumerates the effective-status flavours a generated Share_Record
+// ShareKind enumerates the effective-status flavours a generated share record
 // can take.
 type ShareKind string
 
@@ -115,7 +115,7 @@ const (
 // AllKinds is the full set of share kinds a generator may draw.
 var AllKinds = []ShareKind{KindActiveLimited, KindActiveUnlimited, KindExpired, KindRevoked}
 
-// ShareRecord generates a Share_Record relative to the given reference time
+// ShareRecord generates a share record relative to the given reference time
 // `now`, drawing an arbitrary kind (active-limited, active-unlimited, expired,
 // or revoked). The record's account and VPC ARN are generated consistently.
 func ShareRecord(t *rapid.T, now time.Time) model.ShareRecord {
@@ -123,7 +123,7 @@ func ShareRecord(t *rapid.T, now time.Time) model.ShareRecord {
 	return ShareRecordForAccount(t, now, accountID, VPCArnForAccount(accountID))
 }
 
-// ShareRecordForAccount generates a Share_Record for a fixed account ID and VPC
+// ShareRecordForAccount generates a share record for a fixed account ID and VPC
 // ARN, relative to `now`. This is used by the per-researcher isolation and
 // idempotency properties where the account must be held constant.
 func ShareRecordForAccount(t *rapid.T, now time.Time, accountID, vpcArn string) model.ShareRecord {
@@ -131,7 +131,7 @@ func ShareRecordForAccount(t *rapid.T, now time.Time, accountID, vpcArn string) 
 	return ShareRecordOfKind(t, now, accountID, vpcArn, kind)
 }
 
-// ShareRecordOfKind generates a Share_Record of a specific kind for the given
+// ShareRecordOfKind generates a share record of a specific kind for the given
 // account and VPC ARN, relative to `now`.
 func ShareRecordOfKind(t *rapid.T, now time.Time, accountID, vpcArn string, kind ShareKind) model.ShareRecord {
 	// CreatedAt is always in the past.
@@ -179,7 +179,7 @@ func ULID(t *rapid.T) string {
 	return "01" + rapid.StringMatching(`[0-9A-HJKMNP-TV-Z]{24}`).Draw(t, "shareId")
 }
 
-// ShareRecords generates a slice of 1..maxN Share_Records relative to `now`,
+// ShareRecords generates a slice of 1..maxN share records relative to `now`,
 // all for the given account and VPC ARN.
 func ShareRecords(t *rapid.T, now time.Time, accountID, vpcArn string, maxN int) []model.ShareRecord {
 	n := rapid.IntRange(1, maxN).Draw(t, "numShares")

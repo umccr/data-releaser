@@ -95,7 +95,15 @@ endpoints:
 	}
 }
 
-func TestLoad_MissingRequiredFields(t *testing.T) {
+// The htsget sections are no longer checked when the file is read — a command declares
+// what it reads — so these assert the same missing fields through the declaration.
+func TestRequire_MissingHtsgetFields(t *testing.T) {
+	htsgetSections := []Section{
+		SectionWarehouse,
+		SectionAuthorizationEndpoint,
+		SectionHtsgetEndpoint,
+	}
+
 	tests := []struct {
 		name    string
 		content string
@@ -157,7 +165,11 @@ profile: "test"
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			path := writeTempConfig(t, tt.content)
-			_, err := Load(path)
+			cfg, err := Load(path)
+			if err != nil {
+				t.Fatalf("unexpected load error: %v", err)
+			}
+			err = cfg.Require(htsgetSections...)
 			if err == nil {
 				t.Fatal("expected error, got nil")
 			}
@@ -358,7 +370,7 @@ manifest:
 	}
 }
 
-func TestLoad_RejectsUnknownKeyTemplatePlaceholder(t *testing.T) {
+func TestRequire_RejectsUnknownKeyTemplatePlaceholder(t *testing.T) {
 	content := `
 warehouse:
   athenaWorkgroup: "primary"
@@ -372,7 +384,12 @@ manifest:
 `
 	path := writeTempConfig(t, content)
 
-	_, err := Load(path)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected load error: %v", err)
+	}
+
+	err = cfg.Require(SectionManifest)
 	if err == nil {
 		t.Fatal("expected error for unknown placeholder, got nil")
 	}

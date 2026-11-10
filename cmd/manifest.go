@@ -18,13 +18,13 @@ type manifestTarget struct {
 	key    string
 }
 
-// resolveManifestTarget resolves the Manifest_Bucket and the account's per-account key.
+// resolveManifestTarget resolves the manifest bucket and the account's per-account key.
 // Both are needed before any share is written, so that a share is never persisted only
 // to fail on the manifest upload.
 func resolveManifestTarget(cfg *config.Config, accountID string) (manifestTarget, error) {
 	bucket := strings.TrimSpace(cfg.Manifest.Bucket)
 	if bucket == "" {
-		return manifestTarget{}, fmt.Errorf("manifest.bucket is not configured; the Manifest_Bucket name must be sourced from the Infrastructure_Stack output")
+		return manifestTarget{}, fmt.Errorf("manifest.bucket is not configured; the manifest bucket name must be sourced from the infrastructure stack output")
 	}
 
 	key, err := cfg.Manifest.RenderManifestKey(accountID)
@@ -36,7 +36,7 @@ func resolveManifestTarget(cfg *config.Config, accountID string) (manifestTarget
 }
 
 // regenerateManifest rebuilds the researcher's manifest from every share currently
-// recorded for the account and syncs it to the Manifest_Bucket. It is the single
+// recorded for the account and syncs it to the manifest bucket. It is the single
 // implementation of the "the account's shares changed, republish its manifest" step that
 // share, extend, and revoke all perform.
 //

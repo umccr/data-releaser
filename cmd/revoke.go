@@ -11,13 +11,24 @@ import (
 
 	"github.com/umccr/data-releaser/internal/auth"
 	internalaws "github.com/umccr/data-releaser/internal/aws"
+	"github.com/umccr/data-releaser/internal/config"
 	"github.com/umccr/data-releaser/internal/manifest"
 )
 
 var revokeCmd = &cobra.Command{
-	Use:   "revoke [share-id]",
+	Use:   "revoke <mechanism>",
+	Short: "Stop a researcher account's access",
+	Long: `Stop a researcher account's access to data that was previously shared.
+
+The mechanism is named as part of the invocation and is never inferred, because
+the record being revoked and the way access stops differ between them. The
+available mechanisms are listed below.`,
+}
+
+var revokeHtsgetCmd = &cobra.Command{
+	Use:   "htsget <share-id>",
 	Short: "Revoke an active data share",
-	Long: `Mark a Share_Record as revoked in the Authorization Service.
+	Long: `Mark a share record as revoked in the authorization service.
 
 The revocation itself is immediate and durable. Authorization decisions already
 cached by htsget-rs continue to be served until they expire, so propagation is
@@ -27,6 +38,8 @@ bounded by the Cache-TTL ceiling; there is no operator override.`,
 }
 
 func init() {
+	revokeCmd.AddCommand(revokeHtsgetCmd)
+	requireMechanism(revokeCmd)
 	rootCmd.AddCommand(revokeCmd)
 }
 
@@ -34,10 +47,14 @@ func runRevoke(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 	shareID := args[0]
 
-	// --- Step 1: Load config and create AWS client factory ---
-	cfg := GetConfig()
-	if cfg == nil {
-		return fmt.Errorf("configuration not loaded")
+	// The config and the AWS clients it names.
+	// Only the ledger is required. Revoking must not be blocked by anything the granting
+	// path needs: the manifest that follows is republished on a best-effort basis, and a
+	// missing manifest target is reported as a warning rather than stopping a revocation
+	// that has already taken effect.
+	cfg, err := requireConfig(config.SectionLedger)
+	if err != nil {
+		return err
 	}
 
 	factory, err := internalaws.NewClientFactory(ctx, cfg.Profile, "")
@@ -45,8 +62,8 @@ func runRevoke(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// --- Step 2: Revoke the share via auth service ---
-	store := auth.NewShareStore(factory.DynamoDBClient(), cfg.Authorization.ShareRecordsTable)
+	// Withdrawing the share is what stops the authorization callout admitting it.
+	store := auth.NewShareStore(factory.DynamoDBClient(), cfg.Ledger.Table)
 
 	record, err := store.Revoke(ctx, shareID)
 	if err != nil {
@@ -63,7 +80,7 @@ func runRevoke(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// --- Step 3: Regenerate manifest ---
+	// The researcher's own description of their access, rebuilt from what is left of it.
 	// A manifest failure is reported but does not fail the command: the revocation is
 	// already durable, and re-running revoke would only report a conflict.
 	if target, targetErr := resolveManifestTarget(cfg, record.ResearcherAccountID); targetErr != nil {
@@ -72,7 +89,7 @@ func runRevoke(cmd *cobra.Command, args []string) error {
 		warnf(cmd, "manifest regeneration failed (revocation still applied): %v", syncErr)
 	}
 
-	// --- Step 4: Output confirmation ---
+	// What was withdrawn, from the record as it now stands.
 	revokedAt := record.RevokedAt.Format(time.RFC3339)
 	fmt.Printf("Share revoked successfully:\n")
 	fmt.Printf("  Share ID:    %s\n", record.ShareID)

@@ -1,13 +1,16 @@
 import * as cdk from "aws-cdk-lib";
 import { Template, Match } from "aws-cdk-lib/assertions";
-import { DataReleaserStack } from "../lib/data-releaser-stack";
+import { DataReleaserStack, stateMachineExecutionArns } from "../lib/data-releaser-stack";
 
 const RESEARCHER_A = "111111111111";
 const RESEARCHER_B = "222222222222";
 
+const COPY_STATE_MACHINE_ARN =
+  "arn:aws:states:ap-southeast-2:333333333333:stateMachine:steps-s3-copy";
+const COPY_WORKING_BUCKET = "steps-s3-copy-working";
+
 function synth(overrides: Partial<Parameters<typeof buildStack>[0]> = {}) {
   return buildStack({
-    encryption: "s3-managed",
     provisionOperatorPolicy: false,
     researcherAccountIds: [RESEARCHER_A, RESEARCHER_B],
     ...overrides,
@@ -15,9 +18,10 @@ function synth(overrides: Partial<Parameters<typeof buildStack>[0]> = {}) {
 }
 
 function buildStack(opts: {
-  encryption: "s3-managed" | "kms";
   provisionOperatorPolicy: boolean;
   researcherAccountIds: string[];
+  copyStateMachineArn?: string;
+  copyWorkingBucketName?: string;
 }): Template {
   const app = new cdk.App();
   const stack = new DataReleaserStack(app, "TestStack", {
@@ -29,6 +33,8 @@ function buildStack(opts: {
     cacheDenyTtl: "60s",
     provisionOperatorPolicy: opts.provisionOperatorPolicy,
     apiVpcId: "vpc-12345",
+    copyStateMachineArn: opts.copyStateMachineArn,
+    copyWorkingBucketName: opts.copyWorkingBucketName,
   });
   return Template.fromStack(stack);
 }
@@ -36,7 +42,7 @@ function buildStack(opts: {
 describe("share record table", () => {
   const t = synth();
 
-  it("has partition key shareId and both GSIs", () => {
+  it("has partition key shareId and all three GSIs", () => {
     t.hasResourceProperties("AWS::DynamoDB::Table", {
       KeySchema: [{ AttributeName: "shareId", KeyType: "HASH" }],
       GlobalSecondaryIndexes: Match.arrayWith([
@@ -48,6 +54,13 @@ describe("share record table", () => {
           IndexName: "GSI2",
           KeySchema: [
             { AttributeName: "researcherAccountId", KeyType: "HASH" },
+            { AttributeName: "createdAt", KeyType: "RANGE" },
+          ],
+        }),
+        Match.objectLike({
+          IndexName: "GSI3",
+          KeySchema: [
+            { AttributeName: "datasetUri", KeyType: "HASH" },
             { AttributeName: "createdAt", KeyType: "RANGE" },
           ],
         }),
@@ -253,7 +266,7 @@ describe("manifest bucket", () => {
     });
   });
 
-  it("grants each researcher GetObject scoped to its own prefix and nothing else", () => {
+  it("grants each researcher GetObject scoped to its own prefix under both mechanisms", () => {
     t.hasResourceProperties("AWS::S3::BucketPolicy", {
       PolicyDocument: {
         Statement: Match.arrayWith([
@@ -274,11 +287,23 @@ describe("manifest bucket", () => {
     );
     expect(getObjectStmts).toHaveLength(2);
     const asString = JSON.stringify(getObjectStmts);
-    expect(asString).toContain(`manifests/${RESEARCHER_A}/*`);
-    expect(asString).toContain(`manifests/${RESEARCHER_B}/*`);
+
+    // Both prefixes, because a researcher may hold either kind of access or
+    // both. A document written under a prefix the grant misses is readable by
+    // nobody, and nothing reports that: the write is same-account and succeeds.
+    for (const account of [RESEARCHER_A, RESEARCHER_B]) {
+      expect(asString).toContain(`manifests/${account}/*`);
+      expect(asString).toContain(`datasets/${account}/*`);
+    }
+
+    // Scoped to the account's own prefix and to reading, so one researcher
+    // cannot reach another's document or write over their own.
     for (const s of getObjectStmts) {
       expect(s.Action).toBe("s3:GetObject");
+      expect(s.Resource).toHaveLength(2);
     }
+    expect(asString).not.toContain("manifests/*");
+    expect(asString).not.toContain("datasets/*");
   });
 });
 
@@ -332,12 +357,209 @@ describe("Optional operator policy", () => {
   });
 });
 
-describe("KMS encryption option", () => {
-  it("creates a key with per-account decrypt grants when encryption=kms", () => {
-    const t = synth({ encryption: "kms" });
-    t.resourceCountIs("AWS::KMS::Key", 1);
-    const keys = t.findResources("AWS::KMS::Key");
-    const doc = JSON.stringify(Object.values(keys)[0].Properties.KeyPolicy);
-    expect(doc).toContain("kms:Decrypt");
+describe("recording a finished dataset copy", () => {
+  const t = synth({
+    copyStateMachineArn: COPY_STATE_MACHINE_ARN,
+    copyWorkingBucketName: COPY_WORKING_BUCKET,
+  });
+
+  /**
+   * Logical id of the function that records a copy's outcome against the release
+   * it was staging.
+   */
+  function handlerId(): string {
+    const entries = Object.entries(t.findResources("AWS::Lambda::Function")).filter(
+      ([, fn]) =>
+        (fn as any).Properties.FunctionName === "data-releaser-copy-completion",
+    );
+    expect(entries).toHaveLength(1);
+    return entries[0][0];
+  }
+
+  /**
+   * The inline policy attached to that function's role, which is the whole of
+   * what it may do.
+   */
+  function handlerPolicyDocument(): any {
+    const roles = Object.entries(t.findResources("AWS::IAM::Role")).filter(
+      ([, r]) =>
+        (r as any).Properties.RoleName === "data-releaser-copy-completion-role",
+    );
+    expect(roles).toHaveLength(1);
+    const [roleId] = roles[0];
+
+    const policies = Object.values(t.findResources("AWS::IAM::Policy")).filter((p) =>
+      ((p as any).Properties.Roles ?? []).some((r: any) => r.Ref === roleId),
+    );
+    expect(policies).toHaveLength(1);
+
+    // Nothing else may be bolted onto the role either.
+    const managed = Object.values(t.findResources("AWS::IAM::ManagedPolicy")).filter(
+      (p) => ((p as any).Properties.Roles ?? []).some((r: any) => r.Ref === roleId),
+    );
+    expect(managed).toHaveLength(0);
+
+    return (policies[0] as any).Properties.PolicyDocument;
+  }
+
+  it("deploys the handler inside the VPC alongside the other functions", () => {
+    const functions = t.findResources("AWS::Lambda::Function");
+    expect(Object.keys(functions)).toHaveLength(3);
+
+    const handler = (functions as any)[handlerId()].Properties;
+    expect(handler.Runtime).toBe("provided.al2023");
+    expect(handler.Architectures).toEqual(["arm64"]);
+    expect(handler.VpcConfig.SubnetIds.length).toBeGreaterThan(0);
+    expect(handler.VpcConfig.SecurityGroupIds.length).toBeGreaterThan(0);
+    expect(handler.Environment.Variables.SHARE_RECORDS_TABLE_NAME).toBeDefined();
+  });
+
+  it("routes copy status changes from that state machine to the handler", () => {
+    t.resourceCountIs("AWS::Events::Rule", 1);
+    t.hasResourceProperties("AWS::Events::Rule", {
+      State: "ENABLED",
+      EventPattern: {
+        source: ["aws.states"],
+        "detail-type": ["Step Functions Execution Status Change"],
+        detail: { stateMachineArn: [COPY_STATE_MACHINE_ARN] },
+      },
+      Targets: Match.arrayWith([
+        Match.objectLike({ Arn: { "Fn::GetAtt": [handlerId(), "Arn"] } }),
+      ]),
+    });
+  });
+
+  it("lets the rule invoke the handler and nothing else invoke it", () => {
+    const permissions = Object.values(t.findResources("AWS::Lambda::Permission")).filter(
+      (p) =>
+        JSON.stringify((p as any).Properties.FunctionName).includes(handlerId()),
+    );
+    expect(permissions).toHaveLength(1);
+
+    const props = (permissions[0] as any).Properties;
+    expect(props.Principal).toBe("events.amazonaws.com");
+    expect(props.Action).toBe("lambda:InvokeFunction");
+    expect(JSON.stringify(props.SourceArn)).toContain("CopyCompletionRule");
+  });
+
+  it("matches every status change, leaving the handler to decide which end a copy", () => {
+    const rules = t.findResources("AWS::Events::Rule");
+    const pattern = Object.values(rules)[0].Properties.EventPattern;
+
+    // Enumerating terminal statuses here as well would split that decision in
+    // two, and the half living in the rule fails by dropping an event silently.
+    expect(pattern.detail.status).toBeUndefined();
+    expect(Object.keys(pattern.detail)).toEqual(["stateMachineArn"]);
+  });
+
+  it("reads one release and moves it on, without reaching for an index", () => {
+    const record = handlerPolicyDocument().Statement.find(
+      (s: any) => s.Sid === "RecordCopyOutcome",
+    );
+
+    expect(record.Action).toEqual(["dynamodb:GetItem", "dynamodb:UpdateItem"]);
+    // A copy is named after the release it stages, so the record is addressed by
+    // key: nothing is queried and nothing is scanned.
+    const resource = JSON.stringify(record.Resource);
+    expect(resource).not.toContain("index/");
+    const document = JSON.stringify(handlerPolicyDocument());
+    expect(document).not.toContain("dynamodb:Query");
+    expect(document).not.toContain("dynamodb:Scan");
+    expect(document).not.toContain("dynamodb:PutItem");
+    expect(document).not.toContain("dynamodb:DeleteItem");
+  });
+
+  it("describes only executions of the copy state machine it was given", () => {
+    const describe_ = handlerPolicyDocument().Statement.find(
+      (s: any) => s.Sid === "DescribeCopyExecutions",
+    );
+
+    expect(describe_.Action).toBe("states:DescribeExecution");
+    expect(describe_.Resource).toBe(
+      "arn:aws:states:ap-southeast-2:333333333333:execution:steps-s3-copy:*",
+    );
+    expect(JSON.stringify(handlerPolicyDocument())).not.toContain(
+      "states:StartExecution",
+    );
+  });
+
+  it("reads the copy summary from the orchestration's own bucket only", () => {
+    const read = handlerPolicyDocument().Statement.find(
+      (s: any) => s.Sid === "ReadCopySummary",
+    );
+
+    expect(read.Action).toBe("s3:GetObject");
+    expect(read.Resource).toBe(`arn:aws:s3:::${COPY_WORKING_BUCKET}/*`);
+  });
+
+  it("holds no grant on any dataset bucket or key", () => {
+    const document = handlerPolicyDocument();
+    expect(document.Statement).toHaveLength(3);
+
+    const serialised = JSON.stringify(document);
+    // The identical summary sits in the dataset's cache bucket, encrypted with
+    // that dataset's key. Reading it there would mean this role holding decrypt
+    // on every dataset key that will ever exist, extended by hand each time a
+    // dataset is added — on the one component whose whole job is writing a few
+    // numbers into a table. So: no KMS at all, and no S3 outside the working
+    // bucket.
+    expect(serialised).not.toContain("kms:");
+    expect(serialised).not.toContain("-dataset-");
+
+    for (const statement of document.Statement) {
+      const resources = Array.isArray(statement.Resource)
+        ? statement.Resource
+        : [statement.Resource];
+      for (const resource of resources) {
+        expect(resource).not.toBe("*");
+        if (typeof resource === "string" && resource.startsWith("arn:aws:s3:")) {
+          expect(resource).toBe(`arn:aws:s3:::${COPY_WORKING_BUCKET}/*`);
+        }
+      }
+      for (const action of Array.isArray(statement.Action)
+        ? statement.Action
+        : [statement.Action]) {
+        expect(action).not.toContain(":*");
+      }
+    }
+  });
+
+  it("is absent when no copy orchestration is configured", () => {
+    const bare = synth();
+
+    expect(Object.keys(bare.findResources("AWS::Lambda::Function"))).toHaveLength(2);
+    bare.resourceCountIs("AWS::Events::Rule", 0);
+    expect(JSON.stringify(bare.toJSON())).not.toContain("copy-completion");
+  });
+
+  it("refuses a copy state machine without the bucket its summary lands in", () => {
+    expect(() => synth({ copyStateMachineArn: COPY_STATE_MACHINE_ARN })).toThrow(
+      /copyWorkingBucketName is required/,
+    );
+    expect(() => synth({ copyWorkingBucketName: COPY_WORKING_BUCKET })).toThrow(
+      /copyStateMachineArn is required/,
+    );
+  });
+});
+
+describe("execution ARNs derived from a state machine", () => {
+  it("keeps the state machine's own partition, region and account", () => {
+    expect(stateMachineExecutionArns(COPY_STATE_MACHINE_ARN)).toBe(
+      "arn:aws:states:ap-southeast-2:333333333333:execution:steps-s3-copy:*",
+    );
+    expect(
+      stateMachineExecutionArns("arn:aws-cn:states:cn-north-1:999999999999:stateMachine:copy"),
+    ).toBe("arn:aws-cn:states:cn-north-1:999999999999:execution:copy:*");
+  });
+
+  it("refuses an ARN that is not a state machine", () => {
+    for (const arn of [
+      "arn:aws:states:ap-southeast-2:333333333333:activity:steps-s3-copy",
+      "arn:aws:states:ap-southeast-2:333333333333:execution:steps-s3-copy:run-1",
+      "arn:aws:s3:::steps-s3-copy-working",
+      "arn:aws:lambda:ap-southeast-2:333333333333:function:copy",
+    ]) {
+      expect(() => stateMachineExecutionArns(arn)).toThrow(/not a state machine ARN/);
+    }
   });
 });

@@ -1,9 +1,10 @@
 // Package auth implements the Authorization Service client for managing
-// Share_Records (create, revoke, extend, list) and the authorization callout handler.
+// share records (create, revoke, extend, list) and the authorization callout handler.
 package auth
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
 	"slices"
@@ -40,6 +41,13 @@ const (
 
 // ErrShareNotFound indicates the requested share ID does not exist.
 var ErrShareNotFound = fmt.Errorf("share not found")
+
+// errOtherMechanism reports that a ledger item belongs to the other release mechanism.
+// The table is shared, so a scan or an index query can return items this package has no
+// business reading: their fields are different, and unmarshalling one here would not
+// fail, it would quietly produce a share granting nothing to nobody. Reads therefore
+// filter on the mechanism, and this is the backstop for anything that gets through.
+var errOtherMechanism = errors.New("ledger item belongs to another release mechanism")
 
 // ErrShareAlreadyRevoked indicates the share has already been revoked.
 var ErrShareAlreadyRevoked = fmt.Errorf("share is already revoked")
@@ -125,7 +133,14 @@ func (s *ShareStore) Get(ctx context.Context, shareID string) (*model.ShareRecor
 		return nil, ErrShareNotFound
 	}
 
-	return unmarshalShareRecord(output.Item)
+	record, err := unmarshalShareRecord(output.Item)
+	if errors.Is(err, errOtherMechanism) {
+		// The identifier exists in the table but names a record of the other
+		// mechanism, which this store cannot act on. Reporting it as absent is both
+		// true from here and what the caller can do something with.
+		return nil, ErrShareNotFound
+	}
+	return record, err
 }
 
 // Revoke sets the revokedAt timestamp on a ShareRecord after verifying it is active.
@@ -203,16 +218,43 @@ func (s *ShareStore) Extend(ctx context.Context, shareID string, duration time.D
 	return record, nil
 }
 
+// htsgetItemsOnly is the condition that keeps records of the other release mechanism out
+// of a scan or index query of the shared table. Items written before the table was shared
+// carry no mechanism attribute and are all htsget shares, so their absence has to pass.
+const htsgetItemsOnly = "attribute_not_exists(#mechanism) OR #mechanism = :htsgetMechanism"
+
+// mechanismFilterNames aliases the mechanism attribute, so the filter is unaffected by
+// whether DynamoDB happens to reserve the word.
+func mechanismFilterNames() map[string]string {
+	return map[string]string{"#mechanism": model.MechanismAttribute}
+}
+
+// withHtsgetMechanism adds the value htsgetItemsOnly compares against to a read's own
+// expression values.
+func withHtsgetMechanism(values map[string]types.AttributeValue) map[string]types.AttributeValue {
+	merged := make(map[string]types.AttributeValue, len(values)+1)
+	for k, v := range values {
+		merged[k] = v
+	}
+	merged[":htsgetMechanism"] = &types.AttributeValueMemberS{Value: string(model.MechanismHtsget)}
+	return merged
+}
+
 // ListByAccount queries ShareRecords for a specific researcherAccountId using GSI2,
 // ordered by createdAt descending.
+//
+// The index is keyed on attributes both mechanisms write, so it covers both and the query
+// is filtered down to htsget shares.
 func (s *ShareStore) ListByAccount(ctx context.Context, researcherAccountID string) ([]*model.ShareRecord, error) {
 	output, err := s.client.Query(ctx, &dynamodb.QueryInput{
-		TableName:              aws.String(s.tableName),
-		IndexName:              aws.String(GSI2IndexName),
-		KeyConditionExpression: aws.String("researcherAccountId = :accountId"),
-		ExpressionAttributeValues: map[string]types.AttributeValue{
+		TableName:                aws.String(s.tableName),
+		IndexName:                aws.String(GSI2IndexName),
+		KeyConditionExpression:   aws.String("researcherAccountId = :accountId"),
+		FilterExpression:         aws.String(htsgetItemsOnly),
+		ExpressionAttributeNames: mechanismFilterNames(),
+		ExpressionAttributeValues: withHtsgetMechanism(map[string]types.AttributeValue{
 			":accountId": &types.AttributeValueMemberS{Value: researcherAccountID},
-		},
+		}),
 		ScanIndexForward: aws.Bool(false), // descending order by createdAt (SK)
 	})
 	if err != nil {
@@ -223,9 +265,14 @@ func (s *ShareStore) ListByAccount(ctx context.Context, researcherAccountID stri
 }
 
 // ListAll scans all ShareRecords and returns them ordered by createdAt descending.
+// The scan is filtered to htsget shares, since the table also holds the other
+// mechanism's records.
 func (s *ShareStore) ListAll(ctx context.Context) ([]*model.ShareRecord, error) {
 	output, err := s.client.Scan(ctx, &dynamodb.ScanInput{
-		TableName: aws.String(s.tableName),
+		TableName:                 aws.String(s.tableName),
+		FilterExpression:          aws.String(htsgetItemsOnly),
+		ExpressionAttributeNames:  mechanismFilterNames(),
+		ExpressionAttributeValues: withHtsgetMechanism(nil),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("scanning shares: %w", err)
@@ -299,7 +346,11 @@ func libraryIDSetsEqual(a, b []string) bool {
 // dynamoShareRecord is the DynamoDB-specific representation of a ShareRecord.
 // It uses string-based timestamps for DynamoDB storage.
 type dynamoShareRecord struct {
-	ShareID             string   `dynamodbav:"shareId"`
+	ShareID string `dynamodbav:"shareId"`
+	// Mechanism marks the record as an htsget share, so that reads of the shared table
+	// can tell it from a record of the other mechanism. Items written before the table
+	// was shared carry none, which reads back as htsget.
+	Mechanism           string   `dynamodbav:"mechanism"`
 	ResearcherAccountID string   `dynamodbav:"researcherAccountId"`
 	TargetVpcArn        string   `dynamodbav:"targetVpcArn"`
 	LibraryIDs          []string `dynamodbav:"libraryIds,stringset"`
@@ -323,6 +374,7 @@ type dynamoShareFile struct {
 func marshalShareRecord(record *model.ShareRecord) (map[string]types.AttributeValue, error) {
 	ddbRecord := dynamoShareRecord{
 		ShareID:             record.ShareID,
+		Mechanism:           string(model.MechanismHtsget),
 		ResearcherAccountID: record.ResearcherAccountID,
 		TargetVpcArn:        record.TargetVpcArn,
 		LibraryIDs:          record.LibraryIDs,
@@ -344,10 +396,15 @@ func marshalShareRecord(record *model.ShareRecord) (map[string]types.AttributeVa
 }
 
 // unmarshalShareRecord converts a DynamoDB attribute map to a model.ShareRecord.
+// An item belonging to the other release mechanism yields errOtherMechanism.
 func unmarshalShareRecord(item map[string]types.AttributeValue) (*model.ShareRecord, error) {
 	var ddbRecord dynamoShareRecord
 	if err := attributevalue.UnmarshalMap(item, &ddbRecord); err != nil {
 		return nil, fmt.Errorf("unmarshaling share record: %w", err)
+	}
+
+	if mechanism := model.StoredMechanism(ddbRecord.Mechanism); mechanism != model.MechanismHtsget {
+		return nil, fmt.Errorf("%w: %q belongs to the %s mechanism", errOtherMechanism, ddbRecord.ShareID, mechanism)
 	}
 
 	createdAt, err := time.Parse(time.RFC3339, ddbRecord.CreatedAt)
@@ -410,11 +467,20 @@ func fromDynamoShareFiles(files []dynamoShareFile) []model.ShareFile {
 	})
 }
 
-// unmarshalShareRecords converts a slice of DynamoDB items to ShareRecords.
+// unmarshalShareRecords converts a slice of DynamoDB items to ShareRecords, skipping any
+// item that belongs to the other release mechanism.
+//
+// Every read that lands here is already filtered on the mechanism, so a skip means the
+// filter was not applied — by an emulator, or by a future caller that forgot it. Passing
+// such an item to the htsget unmarshaller would produce a share record granting nothing
+// to nobody, and dropping it is preferable to reporting that.
 func unmarshalShareRecords(items []map[string]types.AttributeValue) ([]*model.ShareRecord, error) {
 	records := make([]*model.ShareRecord, 0, len(items))
 	for _, item := range items {
 		record, err := unmarshalShareRecord(item)
+		if errors.Is(err, errOtherMechanism) {
+			continue
+		}
 		if err != nil {
 			return nil, err
 		}

@@ -122,7 +122,7 @@ const (
 // headers only, so this is the only channel the identity travels over.
 const SourceVpcArnHeader = "Htsget-Context-SourceVpcArn"
 
-// VaryIdentityHeaders is the Vary header value the Authorization_Service emits
+// VaryIdentityHeaders is the Vary header value the authorization service emits
 // on every callout response. It names the forwarded identity header(s)
 // that the authorization decision depends on, so that:
 //   - any cache implementing secondary cache keys can revalidate correctly, and
@@ -232,7 +232,7 @@ func denyResult(now time.Time, ceiling, denyTTL time.Duration) *CalloutResult {
 //   - Returns "no-store".
 func ComputeCacheControl(records []*model.ShareRecord, now time.Time, ceiling time.Duration, denyTTL time.Duration) string {
 	if len(records) == 0 {
-		// Deny: short max-age for negative caching (Req 13.2)
+		// Deny: short max-age for negative caching.
 		seconds := int64(math.Max(0, math.Floor(denyTTL.Seconds())))
 		return fmt.Sprintf("max-age=%d", seconds)
 	}

@@ -48,7 +48,7 @@ func TestCheckRAMAssociation_Missing(t *testing.T) {
 }
 
 // TestValidateResearcher_ContinuesOnFailure verifies every researcher-side check runs
-// even when one fails (Req 15.7).
+// even when one fails.
 func TestValidateResearcher_ContinuesOnFailure(t *testing.T) {
 	// RAM association is missing (fails), but the other checks must still run.
 	ramClient := &stubRAMClient{
@@ -59,7 +59,7 @@ func TestValidateResearcher_ContinuesOnFailure(t *testing.T) {
 
 	opts := ValidateResearcherOpts{
 		RAMClient:      ramClient,
-		LambdaClient:   &stubLambdaClient{}, // no functions -> Test_Lambda unavailable
+		LambdaClient:   &stubLambdaClient{}, // no functions -> test lambda unavailable
 		S3Client:       &awstest.S3{},       // empty policy -> grant check fails
 		AccountID:      "534840902377",
 		ManifestBucket: "data-control-manifest-bucket",
@@ -72,13 +72,13 @@ func TestValidateResearcher_ContinuesOnFailure(t *testing.T) {
 	if ramCheck.Passed {
 		t.Error("expected the RAM association check to fail")
 	}
-	// The Test_Lambda discovery check must still be present despite the earlier failure.
-	discovery := findCheck(t, checks, "Test_Lambda Discovery")
+	// The test lambda discovery check must still be present despite the earlier failure.
+	discovery := findCheck(t, checks, "Test Lambda Discovery")
 	if !discovery.Passed {
-		t.Errorf("expected Test_Lambda discovery to run and report UNAVAILABLE as a pass, got: %s", discovery.Error)
+		t.Errorf("expected test lambda discovery to run and report UNAVAILABLE as a pass, got: %s", discovery.Error)
 	}
 	if !strings.Contains(discovery.Error, "UNAVAILABLE") {
-		t.Errorf("expected an UNAVAILABLE note when no Test_Lambda is deployed, got: %q", discovery.Error)
+		t.Errorf("expected an UNAVAILABLE note when no test lambda is deployed, got: %q", discovery.Error)
 	}
 }
 
@@ -106,7 +106,7 @@ func TestResearcherCheckTestLambda_InvocationError(t *testing.T) {
 	})
 
 	checks := researcherCheckTestLambda(context.Background(), lambdaClient)
-	invocation := findCheck(t, checks, "Test_Lambda Invocation")
+	invocation := findCheck(t, checks, "Test Lambda Invocation")
 	if invocation.Passed {
 		t.Error("expected the invocation check to fail when Invoke errors")
 	}

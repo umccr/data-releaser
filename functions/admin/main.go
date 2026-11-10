@@ -3,7 +3,7 @@
 //
 // It is wiring only: it reads configuration from the environment, constructs a
 // DynamoDB client from the Lambda execution role, and delegates to the existing
-// auth.AdminHandler in internal/auth. No business logic lives here (Req 16.6).
+// auth.AdminHandler in internal/auth. No business logic lives here.
 // AdminHandler.HandleRequest already routes by method+path and already maps
 // state-conflict domain errors onto HTTP status codes (404 not found, 409
 // already-revoked/expired), so this entrypoint only translates the API Gateway
@@ -11,7 +11,7 @@
 //
 // Environment variables (read once at cold start):
 //
-//	SHARE_RECORDS_TABLE_NAME  (required) DynamoDB table holding Share_Records.
+//	SHARE_RECORDS_TABLE_NAME  (required) DynamoDB table holding share records.
 package main
 
 import (
@@ -28,7 +28,7 @@ import (
 	"github.com/umccr/data-releaser/internal/auth"
 )
 
-// envTableName is the environment variable naming the Share_Records table.
+// envTableName is the environment variable naming the share records table.
 // It matches the variable read by the authorization entrypoint.
 const envTableName = "SHARE_RECORDS_TABLE_NAME"
 

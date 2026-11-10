@@ -1,31 +1,36 @@
-# Data Releaser — Infrastructure_Stack (CDK)
+# Data Releaser — infrastructure (CDK)
 
-AWS CDK **TypeScript** application that deploys, into the **Data_Control_Account**,
-every AWS resource the Authorization_Service needs (Requirement 16):
+AWS CDK **TypeScript** application that deploys, into the account this tool runs
+against, every AWS resource the two release mechanisms need:
 
 | Resource                         | Notes                                                                                                                                                                                                                                            |
 |----------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| DynamoDB `ShareRecords`          | PK `shareId`; GSI1 `targetVpcArn` (callout lookup); GSI2 `researcherAccountId`+`createdAt` (list/idempotency); **no TTL**                                                                                                                        |
+| DynamoDB `ShareRecords`          | PK `shareId`; GSI1 `targetVpcArn` (callout lookup); GSI2 `researcherAccountId`+`createdAt` (list/idempotency); GSI3 `datasetUri`+`createdAt` (releases of one dataset); **no TTL**                                                                                                                        |
 | Authorization Lambda             | Go binary from `functions/authorization`; reads GSI1 only                                                                                                                                                                                        |
 | Admin Lambda                     | Go binary from `functions/admin`; read/write table + GSI2                                                                                                                                                                                        |
+| Copy completion Lambda + rule    | Go binary from `functions/copycompletion`, deployed only when `copyStateMachineArn` is set; an EventBridge rule on that state machine's execution status changes moves a staging dataset to staged or failed — see [copy completion](#copy-completion) |
 | API Gateway **REST** API + stage | no gateway cache and no required request parameters — htsget-rs sends a bare `GET /authorize` with the requester identity in the `Htsget-Context-SourceVpcArn` header, and caches the response itself using the `Cache-Control` the Lambda emits |
 | API reachability                 | `PRIVATE` endpoint + `execute-api` interface endpoint in `apiVpcId`, with a resource policy pinned to it — see [API authorization](#api-authorization)                                                                                           |
 | API method authorization         | `/admin/*` additionally requires **SigV4** (`AuthorizationType.IAM`); `GET /authorize` is unauthenticated by necessity and relies on the private endpoint                                                                                        |
 | Lambda execution roles           | scoped to the table and the single index each function queries                                                                                                                                                                                   |
-| Manifest_Bucket + bucket policy  | private, block-public-access; per-account `s3:GetObject` on `manifests/<account-id>/*`                                                                                                                                                           |
+| Manifest bucket + bucket policy  | private, block-public-access; per-account `s3:GetObject` on `manifests/<account-id>/*`                                                                                                                                                           |
 | Operator IAM policy              | optional (`provisionOperatorPolicy`)                                                                                                                                                                                                             |
 
 TypeScript (not CDK Go) because the surrounding UMCCR deployments — including the
 htsget VPC Lattice constructs this system depends on — are CDK TypeScript.
 
 The stack provisions **nothing** outside the Data Control account: no
-researcher-side resources, no Lake Formation / RAM sharing, no htsget-rs
-(Req 16.8).
+researcher-side resources, no Lake Formation / RAM sharing, no htsget-rs.
 
-## Parameters (Req 16.10)
+The app also holds one **hot cache stack per dataset** released as direct S3
+access — see [per-dataset hot cache stacks](#per-dataset-hot-cache-stacks). Those
+are separate stacks, deployed by name; `DataReleaserStack` does not depend on
+them and they do not depend on it.
+
+## Parameters
 
 Everything that varies between environments is a **parameter**, so nothing is
-hardcoded and one source tree deploys to a dev and a prod Data_Control_Account
+hardcoded and one source tree deploys to a dev and a prod account
 with no code change. Every parameter lives under the `dataReleaser` key of
 [`cdk.context.json`](cdk.context.json); edit that file to retarget a deployment.
 No `-c` flags are read, and `cdk.json` carries only CDK feature flags.
@@ -50,11 +55,12 @@ exactly one of them or the wrong one silently wins.
 | `namePrefix`              | Physical-name prefix                                                                                                  | `data-releaser`                             |
 | `stageName`               | REST API stage name                                                                                                   | `prod`                                      |
 | `researcherAccountIds`    | Accounts granted manifest read (JSON array of account IDs)                                                             | `[]`                                        |
-| `cacheTtlCeiling`         | Cache_TTL ceiling (Go duration)                                                                                       | `1h`                                        |
+| `cacheTtlCeiling`         | Cache TTL ceiling (Go duration)                                                                                       | `1h`                                        |
 | `cacheDenyTtl`            | Negative-cache max-age (Go duration)                                                                                  | `60s`                                       |
-| `encryption`              | Manifest_Bucket SSE: `s3-managed` or `kms`                                                                            | `s3-managed`                                |
-| `provisionOperatorPolicy` | Provision the Req 11.2 operator policy                                                                                | `false`                                     |
+| `provisionOperatorPolicy` | Provision the managed policy an operator assumes to run the CLI                                                       | `false`                                     |
 | `apiVpcId`                | VPC hosting the API's interface endpoint and every Lambda; must be the VPC the htsget-rs Lambda runs in. **Required** | `vpc-03e01fb6290012661`                     |
+| `copyStateMachineArn`     | State machine performing dataset copies; set it to deploy the copy completion Lambda and its rule                      | unset — neither is deployed                 |
+| `copyWorkingBucketName`   | Bucket the copy orchestration works in, holding its summary of each run. **Required alongside `copyStateMachineArn`**   | —                                           |
 
 Example — deploy to production Data Control, granting two researcher accounts
 read on their own manifest prefix:
@@ -78,10 +84,11 @@ cdk deploy
 
 ## Go Lambda bundling
 
-Both Lambdas are **Go** binaries on the `provided.al2023` custom runtime, targeting
-**arm64/Graviton**. `GoFunction` from `@aws-cdk/aws-lambda-go-alpha` compiles them
-as part of `cdk synth`, so there is no separate build step and nothing to rebuild
-by hand. It emits the executable as `bootstrap`, which the custom runtime requires.
+Every Lambda in this app is a **Go** binary on the `provided.al2023` custom runtime,
+targeting **arm64/Graviton**. `GoFunction` from `@aws-cdk/aws-lambda-go-alpha`
+compiles them as part of `cdk synth`, so there is no separate build step and nothing
+to rebuild by hand. It emits the executable as `bootstrap`, which the custom runtime
+requires.
 
 Per function this is equivalent to:
 
@@ -104,9 +111,148 @@ asset and triggers a rebuild on the next synth.
 > semver and may change or be removed in a future release. It is pinned to
 > `2.160.0-alpha.0`, matching `aws-cdk-lib`, and both must be bumped together.
 
+## Copy completion
+
+Copying a dataset into its bucket runs for hours or days, so nothing waits on it.
+The copy orchestration announces its own terminal state, an EventBridge rule
+delivers that to `functions/copycompletion`, and the release the copy was staging
+becomes staged — grantable — or failed, which grants nothing and refuses to be
+released.
+
+```jsonc
+// cdk.context.json
+{
+  "dataReleaser": {
+    "copyStateMachineArn": "arn:aws:states:ap-southeast-2:916218008751:stateMachine:steps-s3-copy",
+    "copyWorkingBucketName": "steps-s3-copy-working"
+  }
+}
+```
+
+Set neither and neither resource is deployed, which is what a deployment releasing
+only through htsget wants. Set one without the other and synth fails: without the
+working bucket a finished copy is recorded with none of the figures describing it,
+and without the state machine nothing listens at all and a copied dataset sits in
+the staging state forever.
+
+The rule matches **every** status change on that state machine, terminal or not.
+Which statuses end a copy is the function's to know, and enumerating them in the
+rule as well would split that decision in two — with the half in the rule failing
+by dropping an event silently. A running execution costs one invocation that
+records nothing, and a cost estimate shares the state machine but is named after a
+dataset rather than a release, so it matches no record and is reported as staging
+nothing.
+
+The execution role gets `GetItem` and `UpdateItem` on the table and nothing else
+there — a copy is named after the release it stages, so the record is addressed by
+key rather than searched — plus `states:DescribeExecution` on that state machine's
+executions, for the events whose payload the bus dropped for being too large, and
+`s3:GetObject` on the working bucket, for the copy's summary of what it moved.
+
+It holds **no** access to any dataset bucket or key, deliberately. The copy writes
+that same summary into the dataset's own bucket, where it is encrypted with that
+dataset's key; reading it there would mean this role holding decrypt on every
+dataset key that will ever exist, extended by hand with each new dataset, on the
+one component whose whole job is to write a few numbers into a table. The working
+bucket's copy also outlives a purge of the dataset, which is the other reason it is
+the one read.
+
+A copy orchestration installed in another account needs a rule there forwarding its
+execution events onto this account's bus; the rule here matches only what reaches
+it.
+
+## Per-dataset hot cache stacks
+
+A dataset released as plain S3 access lives in a bucket of its own, encrypted with
+a KMS key used by nothing else. One `HotCache-<name>` stack owns that pair, so
+scheduling deletion of one dataset's key destroys that dataset's copy and reaches
+no other. `HotCacheStack` in [`lib/hot-cache-stack.ts`](lib/hot-cache-stack.ts) is
+the stack; [`lib/hot-cache-stacks.ts`](lib/hot-cache-stacks.ts) turns the
+configured list of datasets into instances of it.
+
+Grants are **not** deployed here. The CLI writes the researcher's access into the
+bucket and key policies when a release is made and rewrites both documents whole
+on every change, so this stack establishes only the baseline they are built on.
+The copy orchestration, the source object store, and everything in a researcher
+account are consumed, not deployed: none of them appear in this app.
+
+Each dataset is one entry in the `datasets` array:
+
+```jsonc
+// cdk.context.json
+{
+  "dataReleaser": {
+    "copyWriterRoleName": "steps-s3-copy-writer-role",
+    "custodianRoleArn": "arn:aws:iam::916218008751:role/dataset-custodian",
+    "datasets": [
+      {
+        "name": "tothill-cup",
+        "datasetUri": "urn:fdc:umccr.org:2025:dataset/tothill/cup"
+      }
+    ]
+  }
+}
+```
+
+```bash
+cdk deploy HotCache-tothill-cup
+```
+
+| Context key             | Meaning                                                                                   | Default             |
+|-------------------------|-------------------------------------------------------------------------------------------|---------------------|
+| `datasets`              | Datasets to deploy, as `{ name, datasetUri, bucketName?, dataRetentionDays? }` objects     | `[]`                |
+| `copyWriterRoleName`    | Role the copy orchestration writes through; each dataset key policy grants it. **Required once a dataset is configured** | —  |
+| `copyWriterRoleAccount` | Account owning that role, when the copy orchestration runs elsewhere                       | this account        |
+| `custodianRoleArn`      | Principal allowed to disable a dataset key and schedule its deletion                       | key admins only     |
+| `obscureBucketNames`    | Derive bucket names with a keyed hash instead of a legible slug                             | `false`             |
+| `dataRetentionDays`     | Storage-cost backstop, in days; must be ≥ 90 and well beyond any release expiry            | `365`               |
+| `keyPendingWindowDays`  | Days a dataset key stays recoverable after deletion is scheduled                            | `7`                 |
+| `logObjectAccess`       | Record object reads via S3 server access logging                                            | `true`              |
+| `accessLogsBucketName`  | Existing bucket to receive those logs; must already permit log delivery                     | one per dataset     |
+
+`name` is an operator-chosen handle: it becomes the stack name, so it must start
+with a letter and hold only letters, digits and hyphens, and it must not change
+once deployed. It stays legible even when bucket names are obscured, because stack
+names are visible only inside this account and never to the party the data goes
+to. Synth rejects a duplicated name and a duplicated `datasetUri` — two entries
+sharing a URI would derive one bucket name and contend for it.
+
+Two things about names are worth care, because both end in a **new empty bucket
+beside a full one that nothing refers to** — the buckets and keys are retained on
+delete, so a rename orphans rather than destroys:
+
+- `obscureBucketNames` requires the hash key in the `HOT_CACHE_BUCKET_NAME_HASH_KEY`
+  environment variable, and synth fails without it rather than falling back to a
+  legible name. The variable, not context, because `cdk.context.json` is checked in
+  and a checked-in key obscures nothing. The same value must be present on every
+  synth.
+- Flipping `obscureBucketNames`, changing the hash key, or editing a `datasetUri`
+  all rename the bucket. Once a bucket holds a copy someone is reading, pin its
+  name with the dataset's `bucketName` and the derivation stops mattering.
+
+The retention rule is a **cost backstop, not an expiry mechanism**: it deletes
+objects, and lifecycle rounds to the following midnight UTC, so a release
+re-granted after a deletion would need a fresh multi-hour copy. Access expiry is a
+time condition in the bucket and key policies instead, which is why the stack
+refuses a retention shorter than 90 days.
+
+### Deployed out of band, not by the CLI
+
+An operator deploys a dataset's stack before staging data into it. The CLI checks
+that the bucket and key exist and reports the deployment that owns them when they
+do not; it never creates them. Otherwise the CLI would need a Node and CDK
+toolchain plus deployment-grade credentials on the same path that grants a
+researcher access, and standing up a bucket and a key would become a side effect
+of a release command.
+
+One consequence for the other stacks: with datasets configured the app holds more
+than one stack, so a bare `cdk deploy` no longer resolves. Name what you mean —
+`cdk deploy DataReleaserStack`, `cdk deploy HotCache-<name>`, or
+`cdk deploy 'HotCache-*'`.
+
 ## Optional: mock test-data bucket (`DataShareTestStack`)
 
-In the real system the shareable reads live in a Data_Account bucket outside this
+In the real system the shareable reads live in a Data Account bucket outside this
 repo. For the mock/demo set-up there is no such account, so an **optional** stack
 stands one up: a locked-down, disposable bucket named
 `data-share-test-<account>-<region>`, seeded with the public htsget-rs sample BAM
@@ -141,8 +287,8 @@ derived `s3:GetObject` grant to this account.
 ## Optional: mock OrcaVault Mart (`MockMartStack`)
 
 A second, **optional** stack stands in for the OrcaVault Mart so the CLI can be
-demoed or exercised end-to-end without warehouse access. It is not part of
-Req 16 and is **off by default**; it deploys only when
+demoed or exercised end-to-end without warehouse access. It is not part of the
+deployment proper and is **off by default**; it deploys only when
 `dataReleaser.mockMart` is `true` in `cdk.context.json`, and only if you also
 name the stack:
 
@@ -241,18 +387,19 @@ CIDR; the Lambdas' allows 443 egress only). It does
 gateway endpoint) or htsget-rs will authorize requests it cannot then serve.
 
 There is deliberately **no public escape hatch**: the former `privateApi=false`
-context flag has been removed, and `lib/vpc-only-aspect.ts` fails `cdk synth`
-for any Lambda without a VPC, any non-PRIVATE or policy-less REST API, any
-API Gateway v2 API, any Lambda function URL or `*`-principal permission, and
-any bucket not blocking all public access. Making anything public again
-requires editing that aspect — a reviewable code change, not a context value.
+context flag has been removed, and nothing in its place makes any of this
+optional. Both Lambdas are always attached to `apiVpcId`'s private-with-egress
+subnets, the REST API is always `PRIVATE` behind a resource policy pinned to the
+interface endpoint, and every bucket blocks all public access. Making anything
+public again requires editing the stack — a reviewable code change, not a
+context value.
 
 The VPC lookup is resolved against the real account **once** and cached in
 `cdk.context.json` (checked in), beside the `dataReleaser` configuration block,
 so `cdk synth` works with no credentials. Only a lookup for a new
 account/region/VPC needs credentials to populate the cache.
 
-## Stack outputs → CLI config (Req 16.4)
+## Stack outputs → CLI config
 
 | Output | CLI config field |
 | --- | --- |

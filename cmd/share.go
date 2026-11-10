@@ -65,33 +65,47 @@ func resolveTargetVpcArn(cfg *config.Config, flagValue, accountID string) (strin
 	return flagValue, nil
 }
 
+// shareCmd is the verb; the mechanism below it decides how access is enforced. It
+// carries no flags of its own, because the mechanisms do not take the same inputs.
 var shareCmd = &cobra.Command{
-	Use:   "share",
-	Short: "Share libraries with a researcher account",
-	Long: `Resolve library IDs to S3 locations, create a Share_Record in the
+	Use:   "share <mechanism>",
+	Short: "Grant a researcher account access to data",
+	Long: `Grant a researcher account access to data.
+
+The mechanism is named as part of the invocation and is never inferred from the
+flags given: each mechanism takes its own inputs and enforces access by its own
+means. The available mechanisms are listed below.`,
+}
+
+var shareHtsgetCmd = &cobra.Command{
+	Use:   "htsget",
+	Short: "Share libraries with a researcher account through htsget-rs",
+	Long: `Resolve library IDs to S3 locations, create a share record in the
 Authorization Service, and deliver a manifest to the researcher account.`,
 	RunE: runShare,
 }
 
 func init() {
-	shareCmd.Flags().StringSlice("libraries", nil, "Comma-separated list of library IDs to share")
-	shareCmd.Flags().String("account", "", "Target researcher AWS account ID")
-	shareCmd.Flags().String("expiry", "", "Optional expiry duration (e.g. 30d, 24h)")
-	shareCmd.Flags().String("target-vpc-arn", "",
+	shareHtsgetCmd.Flags().StringSlice("libraries", nil, "Comma-separated list of library IDs to share")
+	shareHtsgetCmd.Flags().String("account", "", "Target researcher AWS account ID")
+	shareHtsgetCmd.Flags().String("expiry", "", "Optional expiry duration (e.g. 30d, 24h)")
+	shareHtsgetCmd.Flags().String("target-vpc-arn", "",
 		"ARN of the researcher VPC associated with the htsget VPC Lattice service network "+
 			"(e.g. arn:aws:ec2:ap-southeast-2:123456789012:vpc/vpc-0123456789abcdef0). "+
 			"Overrides researchers.<account>.targetVpcArn from the config file.")
 
-	_ = shareCmd.MarkFlagRequired("libraries")
-	_ = shareCmd.MarkFlagRequired("account")
+	_ = shareHtsgetCmd.MarkFlagRequired("libraries")
+	_ = shareHtsgetCmd.MarkFlagRequired("account")
 
+	shareCmd.AddCommand(shareHtsgetCmd)
+	requireMechanism(shareCmd)
 	rootCmd.AddCommand(shareCmd)
 }
 
 func runShare(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 
-	// --- Step 1: Parse and validate inputs ---
+	// Everything checkable is checked before anything is loaded or called.
 	libraries, err := cmd.Flags().GetStringSlice("libraries")
 	if err != nil {
 		return fmt.Errorf("reading --libraries flag: %w", err)
@@ -146,10 +160,19 @@ func runShare(cmd *cobra.Command, args []string) error {
 		expiresAt = &expiry
 	}
 
-	// --- Step 2: Load config and create AWS client factory ---
-	cfg := GetConfig()
-	if cfg == nil {
-		return fmt.Errorf("configuration not loaded")
+	// The config and the AWS clients it names.
+	// Resolving libraries needs the warehouse, the manifest needs a bucket and the
+	// htsget base URL, and the researcher's VPC ARN comes from the researchers section
+	// unless the flag supplied one.
+	cfg, err := requireConfig(
+		config.SectionWarehouse,
+		config.SectionLedger,
+		config.SectionManifest,
+		config.SectionHtsgetEndpoint,
+		config.SectionResearchers,
+	)
+	if err != nil {
+		return err
 	}
 
 	// Resolve the target VPC ARN before doing any work. It is pure input validation and
@@ -164,16 +187,15 @@ func runShare(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// --- Step 3: Run preflight - verify VPC Lattice/RAM connectivity ---
+	// The connectivity the authorization callout depends on, checked before anything is written.
 	checker := lattice.NewChecker(factory.RAMClient())
 	if err := lattice.Preflight(ctx, checker, account); err != nil {
 		return err
 	}
 
-	// --- Step 3b: Preflight - verify the Manifest_Bucket exists and is writable by
-	// the Data Control identity BEFORE any Share_Record is created.
-	// This removes the window where a share is persisted and only then fails on the
-	// manifest upload.
+	// The manifest bucket is checked for existence and writability before any share
+	// record is created, which removes the window where a share is persisted and only
+	// then fails on the manifest upload.
 	writer := manifest.NewWriter(factory.S3Client())
 	target, err := resolveManifestTarget(cfg, account)
 	if err != nil {
@@ -181,29 +203,29 @@ func runShare(cmd *cobra.Command, args []string) error {
 	}
 	if err := writer.VerifyBucketWritable(ctx, target.bucket); err != nil {
 		return fmt.Errorf("manifest bucket %q is missing or not writable by the Data Control identity; "+
-			"the Infrastructure_Stack is not deployed or is misconfigured: %w", target.bucket, err)
+			"the infrastructure stack is not deployed or is misconfigured: %w", target.bucket, err)
 	}
 
-	// --- Step 4: Resolve libraries via Athena ---
+	// The libraries, resolved to the locations they actually live in.
 	whClient := warehouse.NewClient(factory.AthenaClient(), cfg.Warehouse)
 	resolved, err := whClient.ResolveLibraries(ctx, cleanLibraries)
 	if err != nil {
 		return fmt.Errorf("failed to resolve libraries: %w", err)
 	}
 
-	// --- Step 5: Validate resolution ---
+	// A library that resolved to nothing is a share that would grant nothing.
 	if err := warehouse.ValidateResolution(cleanLibraries, resolved); err != nil {
 		return err
 	}
 
-	// --- Step 6: Extract S3 prefixes ---
+	// The prefixes the share record carries.
 	// The prefixes are what authorization is granted on. The per-file list is recorded
 	// alongside them purely so the manifest can name each file's htsget request path.
 	prefixes := warehouse.ExtractPrefixes(resolved)
 	files := warehouse.ExtractFiles(resolved)
 
-	// --- Step 7: Idempotency check and create share record ---
-	store := auth.NewShareStore(factory.DynamoDBClient(), cfg.Authorization.ShareRecordsTable)
+	// The record, created once however many times the same share is asked for.
+	store := auth.NewShareStore(factory.DynamoDBClient(), cfg.Ledger.Table)
 
 	createInput := auth.CreateInput{
 		ResearcherAccountID: account,
@@ -219,12 +241,12 @@ func runShare(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to create share record: %w", err)
 	}
 
-	// --- Step 8/9: Regenerate and upload the researcher's manifest ---
+	// The researcher's own description of the access, rebuilt and delivered.
 	if err := regenerateManifest(ctx, cfg, writer, store, account, target); err != nil {
 		return fmt.Errorf("manifest upload failed (share %s was created): %w", record.ShareID, err)
 	}
 
-	// --- Step 10: Output confirmation ---
+	// What was shared, from the record as it now stands.
 	if reused {
 		fmt.Printf("Existing share reused (idempotent match):\n")
 	} else {

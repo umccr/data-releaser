@@ -19,7 +19,7 @@ import (
 // same code paths the commands use, backed by an in-memory DynamoDB mock. They avoid any
 // live AWS dependency.
 
-const testTable = config.DefaultShareRecordsTable
+const testTable = config.DefaultLedgerTable
 
 // otherAccount is a second valid researcher account used by the state-transition tests.
 // Both it and its VPC ARN must be well-formed: ShareStore.Create rejects an ARN that
@@ -47,7 +47,7 @@ func activeShares(t *testing.T, store *auth.ShareStore, account string, now time
 }
 
 // TestShareCreationFlow covers the happy path of the share command: an idempotent create
-// persists a Share_Record and the generated manifest reflects it.
+// persists a share record and the generated manifest reflects it.
 func TestShareCreationFlow(t *testing.T) {
 	store, m := newStore()
 	account := "534840902377"

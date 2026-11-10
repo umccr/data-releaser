@@ -121,9 +121,9 @@ func TestFormatExpiry(t *testing.T) {
 	}
 }
 
-// TestRenderShareTable_ShowsAllStatuses verifies the listing renders active, expired,
+// TestRenderListing_ShowsAllStatuses verifies the listing renders active, expired,
 // and revoked records — expired and revoked shares must remain visible.
-func TestRenderShareTable_ShowsAllStatuses(t *testing.T) {
+func TestRenderListing_ShowsAllStatuses(t *testing.T) {
 	now := time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC)
 	past := now.Add(-24 * time.Hour)
 	future := now.Add(24 * time.Hour)
@@ -154,11 +154,11 @@ func TestRenderShareTable_ShowsAllStatuses(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	renderShareTable(&buf, records, now)
+	renderListing(&buf, htsgetRows(records, now))
 	out := buf.String()
 
 	// Header present.
-	if !strings.Contains(out, "SHARE ID") || !strings.Contains(out, "STATUS") {
+	if !strings.Contains(out, "MECHANISM") || !strings.Contains(out, "STATE") {
 		t.Errorf("expected a header row, got:\n%s", out)
 	}
 	// All three records visible regardless of status.

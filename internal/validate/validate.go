@@ -35,8 +35,15 @@ type Check struct {
 }
 
 // skip returns a skipped, non-failing check with the given reason.
-func skip(name, reason string) Check {
-	return Check{Name: name, Passed: true, Skipped: true, Error: reason}
+func skip(name, format string, args ...any) Check {
+	return Check{Name: name, Passed: true, Skipped: true, Error: fmt.Sprintf(format, args...)}
+}
+
+// note returns a check that ran and succeeded, carrying something the operator should
+// read anyway. It is distinct from skip because the check did establish what it set out
+// to: the message qualifies a result rather than standing in for one.
+func note(name, format string, args ...any) Check {
+	return Check{Name: name, Passed: true, Error: fmt.Sprintf(format, args...)}
 }
 
 // pass returns a check that ran and succeeded.
@@ -64,7 +71,7 @@ type ValidateProviderOpts struct {
 	APIGatewayClient internalaws.APIGatewayClient
 	HTTPClient       HTTPClient
 	Config           *config.Config
-	// ShareRecordsTableName is the DynamoDB table the Infrastructure_Stack provisions.
+	// ShareRecordsTableName is the DynamoDB table the deployment provisions.
 	ShareRecordsTableName string
 }
 
@@ -82,13 +89,13 @@ func ValidateProvider(ctx context.Context, opts ValidateProviderOpts) []Check {
 	// Check 3: Authorization Service reachability and schema conformance
 	checks = append(checks, checkAuthorizationService(ctx, opts.HTTPClient, opts.Config.Endpoints.Authorization, opts.Config.Validation))
 
-	// Check 4: Htsget_Rs health/service-info endpoint
+	// Check 4: htsget-rs health/service-info endpoint
 	checks = append(checks, checkHtsgetRs(ctx, opts.HTTPClient, opts.Config.Endpoints.HtsgetBaseURL, opts.Config.Validation))
 
 	// Check 5: Cross-account S3 HeadObject on canary object
 	checks = append(checks, checkCrossAccountS3(ctx, opts.S3Client, opts.Config.Validation))
 
-	// Check 6: Infrastructure_Stack resources present and consistent with config (Req 15.10)
+	// Check 6: deployed resources present and consistent with config
 	checks = append(checks, checkShareRecordsTable(ctx, opts.DynamoDBClient, opts.ShareRecordsTableName))
 	checks = append(checks, checkManifestBucket(ctx, opts.S3Client, opts.Config.Manifest.Bucket))
 	checks = append(checks, checkAPIGatewayStage(ctx, opts.APIGatewayClient, opts.Config.Endpoints))
@@ -199,7 +206,7 @@ func checkAuthorizationService(ctx context.Context, httpClient HTTPClient, authE
 	return pass(name)
 }
 
-// checkHtsgetRs verifies the Htsget_Rs endpoint is healthy by hitting the
+// checkHtsgetRs verifies the htsget-rs endpoint is healthy by hitting the
 // /service-info endpoint.
 //
 // When htsget-rs is fronted by VPC Lattice its domain only resolves from inside an
@@ -208,7 +215,7 @@ func checkAuthorizationService(ctx context.Context, httpClient HTTPClient, authE
 // htsget-rs from inside the consumer VPC instead (the aws-vpc-lattice consumer
 // construct's optional test Lambda does exactly this).
 func checkHtsgetRs(ctx context.Context, httpClient HTTPClient, htsgetBaseURL string, valCfg config.ValidationConfig) Check {
-	const name = "Htsget_Rs Health (service-info)"
+	const name = "htsget-rs Health (service-info)"
 
 	if valCfg.SkipHtsgetCheck {
 		return skip(name,
@@ -262,16 +269,16 @@ func checkCrossAccountS3(ctx context.Context, s3Client internalaws.S3Client, val
 	return pass(name)
 }
 
-// checkShareRecordsTable verifies the Share_Record DynamoDB table provisioned by the
-// Infrastructure_Stack exists and is active.
+// checkShareRecordsTable verifies the share record DynamoDB table provisioned by the
+// deployment exists and is active.
 func checkShareRecordsTable(ctx context.Context, ddbClient internalaws.DynamoDBClient, tableName string) Check {
-	const name = "Share_Record DynamoDB Table (Infrastructure_Stack)"
+	const name = "Share Record DynamoDB Table (Deployment)"
 
 	if ddbClient == nil {
 		return fail(name, "DynamoDB client not configured")
 	}
 	if tableName == "" {
-		return fail(name, "Share_Record table name not configured")
+		return fail(name, "share record table name not configured")
 	}
 
 	_, err := ddbClient.DescribeTable(ctx, &dynamodb.DescribeTableInput{
@@ -279,26 +286,26 @@ func checkShareRecordsTable(ctx context.Context, ddbClient internalaws.DynamoDBC
 	})
 	if err != nil {
 		return fail(name, "DynamoDB table %q not found or inaccessible; "+
-			"the Infrastructure_Stack DynamoDB table deployment step is missing or misconfigured: %v", tableName, err)
+			"the DynamoDB table deployment step is missing or misconfigured: %v", tableName, err)
 	}
 
 	return pass(name)
 }
 
-// checkManifestBucket verifies the Manifest_Bucket provisioned by the Infrastructure_Stack
+// checkManifestBucket verifies the manifest bucket provisioned by the deployment
 // exists and is writable by the Data Control identity via a HeadBucket call.
 func checkManifestBucket(ctx context.Context, s3Client internalaws.S3Client, bucket string) Check {
-	const name = "Manifest_Bucket (Infrastructure_Stack)"
+	const name = "Manifest Bucket (Deployment)"
 
 	if bucket == "" {
-		return fail(name, "manifest.bucket not configured; the Manifest_Bucket name must be sourced from the Infrastructure_Stack output")
+		return fail(name, "manifest.bucket not configured; the bucket name must be sourced from the deployment output")
 	}
 
 	// Same reachability test the share preflight uses, so both agree on what a usable
-	// Manifest_Bucket is.
+	// manifest bucket is.
 	if err := manifest.NewWriter(s3Client).VerifyBucketWritable(ctx, bucket); err != nil {
 		return fail(name, "manifest bucket %q missing or not writable by the Data Control identity; "+
-			"the Infrastructure_Stack Manifest_Bucket deployment step is missing or misconfigured: %v", bucket, err)
+			"the manifest bucket deployment step is missing or misconfigured: %v", bucket, err)
 	}
 
 	return pass(name)
@@ -307,7 +314,7 @@ func checkManifestBucket(ctx context.Context, s3Client internalaws.S3Client, buc
 // checkAPIGatewayStage verifies the API Gateway REST API stage named in configuration
 // exists.
 func checkAPIGatewayStage(ctx context.Context, apiClient internalaws.APIGatewayClient, endpoints config.EndpointsConfig) Check {
-	const name = "API Gateway REST API Stage (Infrastructure_Stack)"
+	const name = "API Gateway REST API Stage (Deployment)"
 
 	if apiClient == nil {
 		return fail(name, "API Gateway client not configured")
@@ -325,7 +332,7 @@ func checkAPIGatewayStage(ctx context.Context, apiClient internalaws.APIGatewayC
 	})
 	if err != nil {
 		return fail(name, "API Gateway stage %q on REST API %q not found; "+
-			"the Infrastructure_Stack API Gateway deployment step is missing or misconfigured: %v",
+			"the API Gateway deployment step is missing or misconfigured: %v",
 			endpoints.APIGatewayStageName, endpoints.APIGatewayRestAPIID, err)
 	}
 

@@ -219,7 +219,7 @@ func TestWriter_VerifyBucketWritable_Error(t *testing.T) {
 }
 
 func TestWriter_RendersPerAccountKey(t *testing.T) {
-	// Verify the writer uses the caller-supplied per-account key (Req 7.2).
+	// Verify the writer uses the caller-supplied per-account key.
 	mock := &awstest.S3{}
 	writer := NewWriter(mock)
 

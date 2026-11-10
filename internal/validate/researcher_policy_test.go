@@ -115,7 +115,7 @@ func TestCheckManifestBucketPolicy_WildcardAction(t *testing.T) {
 }
 
 // TestCheckManifestBucketPolicy_GrantShapes covers the statement forms a real
-// Manifest_Bucket policy can take, and the near-misses that substring matching used to
+// manifest bucket policy can take, and the near-misses that substring matching used to
 // accept: a principal whose ARN merely contains the account digits in a role path, a
 // grant on a sibling account's prefix, and a grant on a different bucket.
 func TestCheckManifestBucketPolicy_GrantShapes(t *testing.T) {

@@ -88,7 +88,7 @@ func (s *ShareRecord) EffectiveStatus(now time.Time) ShareStatus {
 }
 
 // AccessRule describes one allowed access scope for a file, mirroring the htsget-rs
-// ReferenceNameRestriction. It is shared by both the Authorization_Service callout
+// ReferenceNameRestriction. It is shared by both the authorization service callout
 // response (htsgetAuth[].rules) and the Manifest (files[].rules).
 //
 // Semantics: an absent/nil field means that dimension is unrestricted (allow-all).
@@ -130,7 +130,7 @@ type ManifestLibrary struct {
 }
 
 // Manifest is the JSON document listing the library IDs and file references that a
-// researcher has been granted access to. One manifest per Researcher_Account.
+// researcher has been granted access to. One manifest per researcher account.
 // The manifest is tool-generated and descriptive only — it does not grant access.
 type Manifest struct {
 	// HtsgetBaseUrl is the htsget-rs base URL for constructing request URLs.

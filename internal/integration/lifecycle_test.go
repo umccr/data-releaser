@@ -264,7 +264,7 @@ func startMinIO(ctx context.Context, t *testing.T) string {
 	return endpoint
 }
 
-// createShareTable creates the Share_Record table with the shareId PK plus the
+// createShareTable creates the share record table with the shareId PK plus the
 // two GSIs the store queries (GSI1 by targetVpcArn, GSI2 by researcherAccountId
 // + createdAt) and waits for it to become ACTIVE.
 func createShareTable(ctx context.Context, t *testing.T, client *dynamodb.Client) {

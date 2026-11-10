@@ -122,7 +122,7 @@ func TestValidateProvider_AllPass(t *testing.T) {
 
 // TestValidateProvider_ContinuesOnFailure verifies that a failure in an early check
 // (credential resolution) does not abort the run — every check still executes and
-// reports its own pass/fail (Req 15.7).
+// reports its own pass/fail.
 func TestValidateProvider_ContinuesOnFailure(t *testing.T) {
 	opts := healthyProviderOpts()
 	opts.STSClient = &stubSTSClient{
@@ -237,7 +237,7 @@ func TestValidateProvider_ReportsPerCheckFailures(t *testing.T) {
 	if table.Passed || table.Error == "" {
 		t.Error("expected the DynamoDB table check to fail with a descriptive error")
 	}
-	bucket := findCheck(t, checks, "Manifest_Bucket")
+	bucket := findCheck(t, checks, "Manifest Bucket")
 	if bucket.Passed || bucket.Error == "" {
 		t.Error("expected the manifest bucket check to fail with a descriptive error")
 	}
