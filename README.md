@@ -83,58 +83,21 @@ trust and data flows between components.
 | Researcher | e.g. `534840902377` | External account that consumes shared data — through htsget-rs over VPC Lattice, or by reading a copied dataset directly out of its cache bucket from one nominated VPC. |
 | Source store | — | The external S3-compatible store the s3 mechanism copies datasets out of. Reached through a custom endpoint with credentials the copy orchestration resolves for itself; they never pass through the CLI. |
 
-```mermaid
-flowchart LR
-    subgraph OPS["Operator"]
-        ADMIN["Administrator<br/>(SSO into Data Control)"]
-        CLI["data-releaser CLI"]
-    end
+The two mechanisms are drawn separately, because they meet only at the CLI, the
+ledger table and the manifest bucket.
 
-    subgraph WH["Warehouse Account (115253169271)"]
-        OV[("OrcaVault Mart<br/>mart.bam")]
-        LF{{"Lake Formation<br/>cross-account share (RAM)"}}
-    end
+**htsget** — the share record is consulted on every request, so the callout is
+part of the read path:
 
-    subgraph DC["Data Control Account (916218008751)"]
-        ATHENA["Athena<br/>(mart resource-link DB)"]
-        APIGW["API Gateway<br/>(response cache)"]
-        AUTH["authorization service<br/>(Lambda)"]
-        DDB[("DynamoDB ledger<br/>shares, copies, grants")]
-        HTS["htsget-rs (Lambda)"]
-        LATTICE{{"VPC Lattice<br/>service network"}}
-        S3MAN[("S3 manifest bucket<br/>per-account prefix")]
-        CACHE[("S3 cache bucket<br/>one per dataset, own KMS key")]
-    end
+![htsget mechanism: the administrator's CLI resolves libraries through Athena, records the share in DynamoDB and publishes a manifest; a researcher's request travels VPC Lattice to htsget-rs, which calls the authorization service and then reads the Data account's S3 bucket](docs/diagrams/topology-htsget.drawio.svg)
 
-    subgraph DATA["Data Account (503977275616)"]
-        S3DATA[("S3 bioinformatics data")]
-    end
+**s3** — the dataset is copied in once and AWS policy enforces every read, so
+nothing of ours is in the read path:
 
-    subgraph RES["Researcher Account (e.g. 534840902377)"]
-        SEQERA["Seqera / consumer"]
-    end
+![s3 mechanism: the CLI starts the copy orchestration, which moves a dataset from the external source store into a per-dataset cache bucket encrypted with its own KMS key; a completion event updates the ledger; the CLI writes the bucket and key policies, and the researcher reads the bucket directly from the nominated VPC](docs/diagrams/topology-s3.drawio.svg)
 
-    ADMIN --> CLI
-    CLI -->|"htsget: resolve libraries (Athena)"| ATHENA
-    CLI -->|"read/write records"| DDB
-    CLI -->|"htsget: verify RAM / lattice assoc."| LATTICE
-    CLI -->|"write manifest (same-account)"| S3MAN
-    CLI -->|"s3: write bucket + key policies"| CACHE
-    SEQERA -.->|"read own manifest (cross-account)"| S3MAN
-    SEQERA -.->|"s3: direct read from own VPC"| CACHE
-
-    ATHENA -->|"SELECT via resource-link"| LF
-    LF --> OV
-
-    APIGW --> AUTH
-    AUTH --> DDB
-    SRC[("external source store")] -.->|"stage: copy service transfers the dataset"| CACHE
-
-    SEQERA -->|"htsget request via lattice"| LATTICE
-    LATTICE --> HTS
-    HTS -->|"auth callout (on cache miss)"| APIGW
-    HTS -->|"cross-account GetObject"| S3DATA
-```
+Each `.drawio.svg` embeds its own source: open it in [draw.io](https://www.drawio.com/)
+(desktop, web, or an editor plugin) and saving it updates the picture in place.
 
 ## How the pieces relate
 
