@@ -1,15 +1,16 @@
-# Kiro local settings (may contain MCP API keys / credentials)
-.kiro/settings/mcp.json
-
 # Go build artifacts
 /bin/
 /dist/
+/data-releaser
 *.exe
 *.out
 *.test
 
 # Dependency / vendor
 /vendor/
+
+# Deployment configuration belongs outside this repository; see config.example.yaml
+/config.yaml
 
 # Environment and credentials
 .env
@@ -24,11 +25,3 @@ Thumbs.db
 # IDE
 .idea/
 .vscode/
-
-# Local research clones of upstream repos (not part of this project)
-/.research/
-# Upstream htsget-rs sub-clone, worked on for the Req 14 callout-cache contribution
-/htsget-rs/
-/htsget-cache/target/
-/.kiro/specs/data-releaser/tasks.meta.json
-/.kiro/steering/sandbox-environment.md

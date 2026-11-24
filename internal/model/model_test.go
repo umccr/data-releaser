@@ -183,7 +183,7 @@ func TestManifest_JSONSerialization(t *testing.T) {
 	expiry := time.Date(2026, 8, 10, 4, 0, 0, 0, time.UTC)
 
 	manifest := Manifest{
-		HtsgetBaseUrl: "https://htsget-lattice.data-control.umccr.org",
+		HtsgetBaseUrl: "https://htsget-lattice.example.org",
 		GeneratedAt:   now,
 		Libraries: []ManifestLibrary{
 			{

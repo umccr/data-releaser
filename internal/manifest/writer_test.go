@@ -15,7 +15,7 @@ import (
 	"github.com/umccr/data-releaser/internal/model"
 )
 
-const testManifestKey = "manifests/534840902377/manifest.json"
+const testManifestKey = "manifests/777788889999/manifest.json"
 
 func TestWriter_Upload_Success(t *testing.T) {
 	mock := &awstest.S3{}
@@ -24,7 +24,7 @@ func TestWriter_Upload_Success(t *testing.T) {
 	now := time.Date(2026, 7, 10, 4, 0, 0, 0, time.UTC)
 	expiry := time.Date(2026, 8, 10, 4, 0, 0, 0, time.UTC)
 	manifest := &model.Manifest{
-		HtsgetBaseUrl: "https://htsget-lattice.data-control.umccr.org",
+		HtsgetBaseUrl: "https://htsget-lattice.example.org",
 		GeneratedAt:   now,
 		Libraries: []model.ManifestLibrary{
 			{

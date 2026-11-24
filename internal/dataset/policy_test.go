@@ -11,13 +11,13 @@ import (
 )
 
 const (
-	testOwnerAccount       = "916218008751"
+	testOwnerAccount       = "999988887777"
 	testResearcherAccount  = "123456789012"
 	testSecondResearcher   = "210987654321"
 	testRegion             = "ap-southeast-2"
 	testDatasetURI         = "s3://ceph-source/datasets/cohort-a/"
 	testBucket             = "hot-cache-cohort-a"
-	testKeyArn             = "arn:aws:kms:ap-southeast-2:916218008751:key/1a2b3c4d-5e6f-7081-92a3-b4c5d6e7f809"
+	testKeyArn             = "arn:aws:kms:ap-southeast-2:999988887777:key/1a2b3c4d-5e6f-7081-92a3-b4c5d6e7f809"
 	testVpcID              = "vpc-0a1b2c3d4e5f60718"
 	testSecondVpcID        = "vpc-0f1e2d3c4b5a69788"
 	testCopyID             = "01J8ZQ4N8Z4T7VQ2K3M5X6Y7Z9"
@@ -32,7 +32,7 @@ func testSettings() PolicySettings {
 		AccountID:          testOwnerAccount,
 		Region:             testRegion,
 		CopyWriterRoleName: "copy-writer",
-		CustodianRoleARN:   "arn:aws:iam::916218008751:role/dataset-custodian",
+		CustodianRoleARN:   "arn:aws:iam::999988887777:role/dataset-custodian",
 	}
 }
 
@@ -557,14 +557,14 @@ func TestRenderedPoliciesRoundTripThroughJSON(t *testing.T) {
 
 func TestRenderPoliciesReadsThePartitionFromTheKey(t *testing.T) {
 	grant := grantedFixture(nil)
-	grant.KeyArn = "arn:aws-cn:kms:cn-north-1:916218008751:key/1a2b3c4d-5e6f-7081-92a3-b4c5d6e7f809"
+	grant.KeyArn = "arn:aws-cn:kms:cn-north-1:999988887777:key/1a2b3c4d-5e6f-7081-92a3-b4c5d6e7f809"
 
 	target := targetFixture(grant)
 	target.KeyArn = grant.KeyArn
 
 	settings := testSettings()
 	settings.Region = "cn-north-1"
-	settings.CustodianRoleARN = "arn:aws-cn:iam::916218008751:role/dataset-custodian"
+	settings.CustodianRoleARN = "arn:aws-cn:iam::999988887777:role/dataset-custodian"
 
 	policies, err := RenderPolicies(target, settings)
 	if err != nil {

@@ -2,8 +2,7 @@
 # Install once per clone:  pre-commit install
 # Run against everything:  pre-commit run --all-files
 #
-# Secret scanning only for now. Formatters, linters, and CDK checks are added
-# alongside the tooling they belong to (see tasks 22 and 24).
+# Secret scanning only for now.
 repos:
   - repo: https://github.com/Yelp/detect-secrets
     rev: v1.5.0
@@ -14,7 +13,6 @@ repos:
         exclude: |
           (?x)^(
             go\.sum|
-            .*/Cargo\.lock|
             \.secrets\.baseline|
             .*/pnpm-lock\.yaml
           )$

@@ -37,13 +37,13 @@ var (
 // directReadOnlyConfigFile carries what a direct-read release needs and nothing the
 // htsget mechanism reads.
 const directReadOnlyConfigFile = `
-account: "916218008751"
+account: "999988887777"
 region: "ap-southeast-2"
 manifest:
   bucket: "data-control-manifests"
 s3:
   copy:
-    stateMachineArn: "arn:aws:states:ap-southeast-2:916218008751:stateMachine:steps-s3-copy"
+    stateMachineArn: "arn:aws:states:ap-southeast-2:999988887777:stateMachine:steps-s3-copy"
     workingBucket: "steps-s3-copy-working"
     writerRoleName: "steps-s3-copy-writer"
   source:
@@ -63,8 +63,8 @@ endpoints:
   authorization: "https://auth.example.com"
   htsgetBaseUrl: "https://htsget.example.com"
 researchers:
-  "534840902377":
-    targetVpcArn: "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-0123456789abcdef0"
+  "777788889999":
+    targetVpcArn: "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-0123456789abcdef0"
 `
 
 // TestLoadingConfigChecksNothing covers the root's half of the split. Which fields matter

@@ -166,7 +166,7 @@ func TestDatasetCopyAndGrantLifecycle(t *testing.T) {
 	}
 	// The dataset document sits under its own prefix so a researcher holding both kinds
 	// of access does not have one description overwrite the other.
-	if manifestKey != "datasets/534840902377/manifest.json" {
+	if manifestKey != "datasets/777788889999/manifest.json" {
 		t.Fatalf("unexpected manifest key: %q", manifestKey)
 	}
 

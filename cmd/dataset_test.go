@@ -43,7 +43,7 @@ import (
 const (
 	releaseDataset    = "s3://ceph-source/datasets/cohort-a/"
 	releaseBucket     = "data-releaser-dataset-cohort-a"
-	releaseKeyArn     = "arn:aws:kms:ap-southeast-2:916218008751:key/1a2b3c4d-5e6f-7081-92a3-b4c5d6e7f809"
+	releaseKeyArn     = "arn:aws:kms:ap-southeast-2:999988887777:key/1a2b3c4d-5e6f-7081-92a3-b4c5d6e7f809"
 	releaseResearcher = "123456789012"
 	releaseVpc        = "vpc-0a1b2c3d4e5f60718"
 
@@ -57,7 +57,7 @@ const (
 	// count multiplied by it and a report quoting the wrong one is visible.
 	objectSize = 4096
 
-	releaseAccount        = "916218008751"
+	releaseAccount        = "999988887777"
 	releaseRegion         = "ap-southeast-2"
 	releaseManifestBucket = "data-releaser-manifests"
 )
@@ -89,7 +89,7 @@ func releaseConfig() *config.Config {
 		Ledger:  config.LedgerConfig{Table: config.DefaultLedgerTable},
 		S3: config.S3Config{
 			Copy: config.CopyServiceConfig{
-				StateMachineArn: "arn:aws:states:ap-southeast-2:916218008751:stateMachine:copy",
+				StateMachineArn: "arn:aws:states:ap-southeast-2:999988887777:stateMachine:copy",
 				WorkingBucket:   "copy-working",
 				WriterRoleName:  "copy-writer",
 			},
@@ -106,7 +106,7 @@ func releaseConfig() *config.Config {
 				Bucket:      releaseManifestBucket,
 				KeyTemplate: config.DefaultDatasetManifestKeyTemplate,
 			},
-			CustodianRoleArn: "arn:aws:iam::916218008751:role/custodian",
+			CustodianRoleArn: "arn:aws:iam::999988887777:role/custodian",
 		},
 	}
 }
@@ -122,7 +122,7 @@ func copyFixture(id string, state dataset.CopyState) *dataset.Copy {
 		KeyArn:           releaseKeyArn,
 		State:            state,
 		CreatedAt:        releaseClock.Add(-30 * 24 * time.Hour),
-		CopyExecutionArn: "arn:aws:states:ap-southeast-2:916218008751:execution:copy:" + id,
+		CopyExecutionArn: "arn:aws:states:ap-southeast-2:999988887777:execution:copy:" + id,
 	}
 
 	switch state {

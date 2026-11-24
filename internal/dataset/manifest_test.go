@@ -29,7 +29,7 @@ const (
 	docStranger = "210987654321"
 
 	docRegion    = "ap-southeast-2"
-	docOwner     = "916218008751"
+	docOwner     = "999988887777"
 	docBucket    = "data-control-researcher-manifests"
 	docKeyPrefix = "datasets/"
 

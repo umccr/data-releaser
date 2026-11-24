@@ -13,8 +13,8 @@ import (
 
 const (
 	testBucket    = "data-control-manifest-bucket"
-	testAccountID = "534840902377"
-	testPrefix    = "manifests/534840902377/*"
+	testAccountID = "777788889999"
+	testPrefix    = "manifests/777788889999/*"
 )
 
 // policyClient returns an S3 stub whose GetBucketPolicy serves the given policy
@@ -40,9 +40,9 @@ func TestCheckManifestBucketPolicy_GrantPresent(t *testing.T) {
       "Statement": [
         {
           "Effect": "Allow",
-          "Principal": {"AWS": "arn:aws:iam::534840902377:root"},
+          "Principal": {"AWS": "arn:aws:iam::777788889999:root"},
           "Action": ["s3:GetObject"],
-          "Resource": ["arn:aws:s3:::data-control-manifest-bucket/manifests/534840902377/*"]
+          "Resource": ["arn:aws:s3:::data-control-manifest-bucket/manifests/777788889999/*"]
         }
       ]
     }`
@@ -101,9 +101,9 @@ func TestCheckManifestBucketPolicy_WildcardAction(t *testing.T) {
       "Statement": [
         {
           "Effect": "Allow",
-          "Principal": "arn:aws:iam::534840902377:root",
+          "Principal": "arn:aws:iam::777788889999:root",
           "Action": "s3:*",
-          "Resource": "arn:aws:s3:::data-control-manifest-bucket/manifests/534840902377/*"
+          "Resource": "arn:aws:s3:::data-control-manifest-bucket/manifests/777788889999/*"
         }
       ]
     }`
@@ -128,9 +128,9 @@ func TestCheckManifestBucketPolicy_GrantShapes(t *testing.T) {
 			name: "principal as AWS list",
 			statement: `{
               "Effect": "Allow",
-              "Principal": {"AWS": ["arn:aws:iam::999999999999:root", "arn:aws:iam::534840902377:root"]},
+              "Principal": {"AWS": ["arn:aws:iam::999999999999:root", "arn:aws:iam::777788889999:root"]},
               "Action": "s3:GetObject",
-              "Resource": "arn:aws:s3:::data-control-manifest-bucket/manifests/534840902377/*"
+              "Resource": "arn:aws:s3:::data-control-manifest-bucket/manifests/777788889999/*"
             }`,
 			wantPass: true,
 		},
@@ -138,9 +138,9 @@ func TestCheckManifestBucketPolicy_GrantShapes(t *testing.T) {
 			name: "principal as bare account ID",
 			statement: `{
               "Effect": "Allow",
-              "Principal": {"AWS": "534840902377"},
+              "Principal": {"AWS": "777788889999"},
               "Action": "s3:GetObject",
-              "Resource": "arn:aws:s3:::data-control-manifest-bucket/manifests/534840902377/*"
+              "Resource": "arn:aws:s3:::data-control-manifest-bucket/manifests/777788889999/*"
             }`,
 			wantPass: true,
 		},
@@ -150,7 +150,7 @@ func TestCheckManifestBucketPolicy_GrantShapes(t *testing.T) {
               "Effect": "Allow",
               "Principal": "*",
               "Action": "s3:GetObject",
-              "Resource": "arn:aws:s3:::data-control-manifest-bucket/manifests/534840902377/*"
+              "Resource": "arn:aws:s3:::data-control-manifest-bucket/manifests/777788889999/*"
             }`,
 			wantPass: true,
 		},
@@ -158,7 +158,7 @@ func TestCheckManifestBucketPolicy_GrantShapes(t *testing.T) {
 			name: "resource wildcard above the prefix",
 			statement: `{
               "Effect": "Allow",
-              "Principal": {"AWS": "arn:aws:iam::534840902377:root"},
+              "Principal": {"AWS": "arn:aws:iam::777788889999:root"},
               "Action": "s3:GetObject",
               "Resource": "arn:aws:s3:::data-control-manifest-bucket/*"
             }`,
@@ -168,7 +168,7 @@ func TestCheckManifestBucketPolicy_GrantShapes(t *testing.T) {
 			name: "bare wildcard resource",
 			statement: `{
               "Effect": "Allow",
-              "Principal": {"AWS": "arn:aws:iam::534840902377:root"},
+              "Principal": {"AWS": "arn:aws:iam::777788889999:root"},
               "Action": "*",
               "Resource": "*"
             }`,
@@ -178,9 +178,9 @@ func TestCheckManifestBucketPolicy_GrantShapes(t *testing.T) {
 			name: "account digits appear only in an unrelated role path",
 			statement: `{
               "Effect": "Allow",
-              "Principal": {"AWS": "arn:aws:iam::999999999999:role/534840902377/audit"},
+              "Principal": {"AWS": "arn:aws:iam::999999999999:role/777788889999/audit"},
               "Action": "s3:GetObject",
-              "Resource": "arn:aws:s3:::data-control-manifest-bucket/manifests/534840902377/*"
+              "Resource": "arn:aws:s3:::data-control-manifest-bucket/manifests/777788889999/*"
             }`,
 			wantPass: false,
 		},
@@ -188,7 +188,7 @@ func TestCheckManifestBucketPolicy_GrantShapes(t *testing.T) {
 			name: "grant scoped to a sibling account's prefix",
 			statement: `{
               "Effect": "Allow",
-              "Principal": {"AWS": "arn:aws:iam::534840902377:root"},
+              "Principal": {"AWS": "arn:aws:iam::777788889999:root"},
               "Action": "s3:GetObject",
               "Resource": "arn:aws:s3:::data-control-manifest-bucket/manifests/999999999999/*"
             }`,
@@ -198,9 +198,9 @@ func TestCheckManifestBucketPolicy_GrantShapes(t *testing.T) {
 			name: "grant on a different bucket",
 			statement: `{
               "Effect": "Allow",
-              "Principal": {"AWS": "arn:aws:iam::534840902377:root"},
+              "Principal": {"AWS": "arn:aws:iam::777788889999:root"},
               "Action": "s3:GetObject",
-              "Resource": "arn:aws:s3:::some-other-bucket/manifests/534840902377/*"
+              "Resource": "arn:aws:s3:::some-other-bucket/manifests/777788889999/*"
             }`,
 			wantPass: false,
 		},
@@ -208,9 +208,9 @@ func TestCheckManifestBucketPolicy_GrantShapes(t *testing.T) {
 			name: "action does not cover GetObject",
 			statement: `{
               "Effect": "Allow",
-              "Principal": {"AWS": "arn:aws:iam::534840902377:root"},
+              "Principal": {"AWS": "arn:aws:iam::777788889999:root"},
               "Action": ["s3:PutObject", "s3:ListBucket"],
-              "Resource": "arn:aws:s3:::data-control-manifest-bucket/manifests/534840902377/*"
+              "Resource": "arn:aws:s3:::data-control-manifest-bucket/manifests/777788889999/*"
             }`,
 			wantPass: false,
 		},
@@ -218,9 +218,9 @@ func TestCheckManifestBucketPolicy_GrantShapes(t *testing.T) {
 			name: "matching statement is a Deny",
 			statement: `{
               "Effect": "Deny",
-              "Principal": {"AWS": "arn:aws:iam::534840902377:root"},
+              "Principal": {"AWS": "arn:aws:iam::777788889999:root"},
               "Action": "s3:GetObject",
-              "Resource": "arn:aws:s3:::data-control-manifest-bucket/manifests/534840902377/*"
+              "Resource": "arn:aws:s3:::data-control-manifest-bucket/manifests/777788889999/*"
             }`,
 			wantPass: false,
 		},

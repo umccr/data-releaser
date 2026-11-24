@@ -93,7 +93,7 @@ configured, so a bare `cdk deploy` no longer resolves to a single target:
 Neither command takes any `-c` flags: all configuration is read from
 `infrastructure/cdk.context.json` (see below). `cdk synth` needs no credentials
 as long as `account`/`region` there match the VPC lookup cached in that same
-file (checked in). A lookup for a new account, region or `apiVpcId` needs
+file. A lookup for a new account, region or `apiVpcId` needs
 credentials once to populate that cache. `cdk deploy` always uses your resolved
 AWS credentials.
 
@@ -110,18 +110,24 @@ Everything that varies between environments is a **parameter**, never hardcoded
 account with no code change. Every parameter lives under the `dataReleaser` key
 of `infrastructure/cdk.context.json`; edit that file to retarget a deployment.
 
+Start from the example: `cp infrastructure/cdk.context.example.json
+infrastructure/cdk.context.json`. The real file is gitignored, because it holds
+your account IDs, VPC and the subnets CDK looks up. Keep it with the rest of
+your deployment configuration, for example in a private repository, and copy or
+link it into `infrastructure/` before running CDK.
+
 ```jsonc
 // infrastructure/cdk.context.json
 {
   "dataReleaser": {
-    "account": "916218008751",
+    "account": "999988887777",
     "region": "ap-southeast-2",
-    "apiVpcId": "vpc-03e01fb6290012661",
+    "apiVpcId": "vpc-0345678901bcdef02",
     "researcherAccountIds": ["111111111111", "222222222222"]
     // ... see the tables below
   },
   // The VPC lookup cache CDK maintains itself — leave it alone.
-  "vpc-provider:account=916218008751:filter.vpc-id=...": { }
+  "vpc-provider:account=999988887777:filter.vpc-id=...": { }
 }
 ```
 
@@ -145,9 +151,9 @@ Two things to know about this file rather than `cdk.json` or `-c` flags:
 > ⚠️ **`cdk context --clear` and `cdk context --reset` wipe this configuration.**
 > Those commands are meant for the lookup cache, but they rewrite the whole file
 > and delete the hand-authored `dataReleaser` block along with it. If you run
-> one to refresh a stale VPC lookup, restore the block afterwards with
-> `git checkout infrastructure/cdk.context.json`, or delete just the
-> `vpc-provider:` entry by hand instead.
+> one to refresh a stale VPC lookup, restore the block afterwards from your
+> saved copy of the file, or delete just the `vpc-provider:` entry by hand
+> instead.
 
 ### Context parameters
 
@@ -161,7 +167,7 @@ Two things to know about this file rather than `cdk.json` or `-c` flags:
 | `cacheTtlCeiling` | Ceiling on the authorization response cache lifetime, Go duration string | `1h` |
 | `cacheDenyTtl` | Negative-cache max-age, Go duration string | `60s` |
 | `provisionOperatorPolicy` | Provision the optional managed policy an operator runs the CLI with | `false` |
-| `apiVpcId` | VPC hosting the API's interface endpoint and all Lambdas; must be the VPC the htsget-rs Lambda runs in. **Required** — there is no public deployment mode | `vpc-03e01fb6290012661` |
+| `apiVpcId` | VPC hosting the API's interface endpoint and all Lambdas; must be the VPC the htsget-rs Lambda runs in. **Required** — there is no public deployment mode | `vpc-0345678901bcdef02` |
 | `copyStateMachineArn` | State machine performing dataset copies; setting it deploys the copy completion Lambda and the EventBridge rule feeding it | unset — neither is deployed |
 | `copyWorkingBucketName` | Bucket the copy orchestration works in, holding its summary of each run. **Required alongside `copyStateMachineArn`** | — |
 
@@ -196,7 +202,7 @@ other. Each entry in `datasets` produces one such stack, deployed by name.
   "dataReleaser": {
     "copyWriterRoleName": "steps-s3-copy-role",
     "datasets": [
-      { "name": "cup-test", "datasetUri": "s3://5180-guardians-node/cup_test/" }
+      { "name": "cohort-a", "datasetUri": "s3://source-bucket/datasets/cohort-a/" }
     ]
   }
 }
@@ -224,8 +230,8 @@ a rename does not move a copy, it abandons it and stands an empty bucket up
 beside it. `obscureBucketNames` requires the hash key in the
 `HOT_CACHE_BUCKET_NAME_HASH_KEY` environment variable and synth fails without
 it rather than falling back to a legible name — an environment variable rather
-than context because `cdk.context.json` is checked in, and a checked-in key
-obscures nothing. The CLI derives the same name from the same inputs, so its
+than context because `cdk.context.json` is normally kept in version control, and
+a key kept there obscures nothing. The CLI derives the same name from the same inputs, so its
 `s3.hotCache` settings and this variable have to agree with the deployment's; see
 [`docs/configuration.md`](configuration.md). Once a bucket holds a copy someone
 is reading, pin its name with the dataset's `bucketName` and the derivation
@@ -262,8 +268,7 @@ Because the API is private, `endpoints.authorization` is not reachable
 from an operator's machine. Set `validation.skipAuthorizationCheck` so `validate`
 reports that probe as `SKIP` instead of failing on a healthy deployment; see
 [`infrastructure/README.md`](../infrastructure/README.md#api-authorization) for
-the reasoning and [`DEMO.md`](../DEMO.md) for how to verify the endpoint
-from inside the VPC.
+the reasoning. To check the endpoint itself, call it from a host inside the VPC.
 
 Read the outputs after deploying, for example:
 

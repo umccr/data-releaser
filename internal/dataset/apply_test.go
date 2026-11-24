@@ -18,12 +18,12 @@ import (
 // Fixtures for the applier, kept separate from the renderer's so that a change to either
 // set cannot silently alter what the other is asserting.
 const (
-	applyOwnerAccount      = "916218008751"
+	applyOwnerAccount      = "999988887777"
 	applyResearcherAccount = "210987654321"
 	applyDatasetURI        = "s3://ceph-source/datasets/cohort-b/"
 	applyGrantID           = "01JAAAAAAAAAAAAAAAAAAAAAAA"
 	applyBucket            = "hot-cache-cohort-b"
-	applyKeyArn            = "arn:aws:kms:ap-southeast-2:916218008751:key/8f7e6d5c-4b3a-2019-8877-665544332211"
+	applyKeyArn            = "arn:aws:kms:ap-southeast-2:999988887777:key/8f7e6d5c-4b3a-2019-8877-665544332211"
 	applyVpcID             = "vpc-00112233445566778"
 )
 
@@ -32,7 +32,7 @@ func applierSettings() PolicySettings {
 		AccountID:          applyOwnerAccount,
 		Region:             "ap-southeast-2",
 		CopyWriterRoleName: "copy-writer",
-		CustodianRoleARN:   "arn:aws:iam::916218008751:role/dataset-custodian",
+		CustodianRoleARN:   "arn:aws:iam::999988887777:role/dataset-custodian",
 	}
 }
 

@@ -50,7 +50,7 @@ func activeShares(t *testing.T, store *auth.ShareStore, account string, now time
 // persists a share record and the generated manifest reflects it.
 func TestShareCreationFlow(t *testing.T) {
 	store, m := newStore()
-	account := "534840902377"
+	account := "777788889999"
 	expiry := time.Now().UTC().Add(7 * 24 * time.Hour)
 
 	rec, reused, err := store.CreateIdempotent(context.Background(), auth.CreateInput{
@@ -107,7 +107,7 @@ func TestShareCreationFlow(t *testing.T) {
 // manifest (which becomes empty when no active shares remain).
 func TestRevokeTransition(t *testing.T) {
 	store, _ := newStore()
-	account := "534840902377"
+	account := "777788889999"
 
 	created, err := store.Create(context.Background(), auth.CreateInput{
 		ResearcherAccountID: account,

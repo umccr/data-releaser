@@ -22,8 +22,8 @@ func setupAdminHandler() (*AdminHandler, *awstest.DynamoDB) {
 func TestHandleCreate_Success(t *testing.T) {
 	handler, _ := setupAdminHandler()
 	req := CreateRequest{
-		ResearcherAccountID: "534840902377",
-		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123",
+		ResearcherAccountID: "777788889999",
+		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-123",
 		LibraryIDs:          []string{"L2400001", "L2400002"},
 		S3Prefixes:          []string{"s3://bucket/prefix1/", "s3://bucket/prefix2/"},
 	}
@@ -45,8 +45,8 @@ func TestHandleCreate_Success(t *testing.T) {
 func TestHandleCreate_WithExpiry(t *testing.T) {
 	handler, _ := setupAdminHandler()
 	req := CreateRequest{
-		ResearcherAccountID: "534840902377",
-		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123",
+		ResearcherAccountID: "777788889999",
+		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-123",
 		LibraryIDs:          []string{"L2400001"},
 		S3Prefixes:          []string{"s3://bucket/prefix1/"},
 		ExpiresAt:           new(time.Now().UTC().Add(7 * 24 * time.Hour).Format(time.RFC3339)),
@@ -66,15 +66,15 @@ func TestHandleCreate_WithExpiry(t *testing.T) {
 func TestHandleCreate_Idempotent(t *testing.T) {
 	handler, _ := setupAdminHandler()
 	req := CreateRequest{
-		ResearcherAccountID: "534840902377",
-		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123",
+		ResearcherAccountID: "777788889999",
+		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-123",
 		LibraryIDs:          []string{"L2400001", "L2400002"},
 		S3Prefixes:          []string{"s3://bucket/prefix1/", "s3://bucket/prefix2/"},
 	}
 	resp1, _, _ := handler.HandleCreate(context.Background(), req)
 	req2 := CreateRequest{
-		ResearcherAccountID: "534840902377",
-		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123",
+		ResearcherAccountID: "777788889999",
+		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-123",
 		LibraryIDs:          []string{"L2400002", "L2400001"},
 		S3Prefixes:          []string{"s3://bucket/prefix2/", "s3://bucket/prefix1/"},
 	}
@@ -93,7 +93,7 @@ func TestHandleCreate_Idempotent(t *testing.T) {
 func TestHandleCreate_MissingAccount(t *testing.T) {
 	handler, _ := setupAdminHandler()
 	req := CreateRequest{
-		TargetVpcArn: "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123",
+		TargetVpcArn: "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-123",
 		LibraryIDs:   []string{"L2400001"},
 		S3Prefixes:   []string{"s3://bucket/prefix1/"},
 	}
@@ -109,8 +109,8 @@ func TestHandleCreate_MissingAccount(t *testing.T) {
 func TestHandleCreate_EmptyLibraries(t *testing.T) {
 	handler, _ := setupAdminHandler()
 	req := CreateRequest{
-		ResearcherAccountID: "534840902377",
-		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123",
+		ResearcherAccountID: "777788889999",
+		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-123",
 		LibraryIDs:          []string{},
 		S3Prefixes:          []string{"s3://bucket/prefix1/"},
 	}
@@ -127,8 +127,8 @@ func TestHandleCreate_InvalidExpiry(t *testing.T) {
 	handler, _ := setupAdminHandler()
 	bad := "not-a-date"
 	req := CreateRequest{
-		ResearcherAccountID: "534840902377",
-		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123",
+		ResearcherAccountID: "777788889999",
+		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-123",
 		LibraryIDs:          []string{"L2400001"},
 		S3Prefixes:          []string{"s3://bucket/prefix1/"},
 		ExpiresAt:           &bad,
@@ -149,13 +149,13 @@ func TestHandleCreate_InvalidExpiry(t *testing.T) {
 func TestHandleCreate_InvalidTargetVpcArn(t *testing.T) {
 	for name, arn := range map[string]string{
 		"not an arn":          "arn",
-		"lattice association": "arn:aws:vpc-lattice:ap-southeast-2:534840902377:servicenetworkserviceassociation/*",
+		"lattice association": "arn:aws:vpc-lattice:ap-southeast-2:777788889999:servicenetworkserviceassociation/*",
 		"other account":       "arn:aws:ec2:ap-southeast-2:999999999999:vpc/vpc-0000000000000001",
 	} {
 		t.Run(name, func(t *testing.T) {
 			handler, mock := setupAdminHandler()
 			_, errResp, status := handler.HandleCreate(context.Background(), CreateRequest{
-				ResearcherAccountID: "534840902377",
+				ResearcherAccountID: "777788889999",
 				TargetVpcArn:        arn,
 				LibraryIDs:          []string{"L2400001"},
 				S3Prefixes:          []string{"demo/L2400001/"},
@@ -180,8 +180,8 @@ func TestHandleCreate_InvalidTargetVpcArn(t *testing.T) {
 func TestHandleRevoke_Success(t *testing.T) {
 	handler, _ := setupAdminHandler()
 	createReq := CreateRequest{
-		ResearcherAccountID: "534840902377",
-		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123",
+		ResearcherAccountID: "777788889999",
+		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-123",
 		LibraryIDs:          []string{"L2400001"},
 		S3Prefixes:          []string{"s3://bucket/prefix1/"},
 	}
@@ -220,8 +220,8 @@ func TestHandleRevoke_NotFound(t *testing.T) {
 func TestHandleRevoke_AlreadyRevoked(t *testing.T) {
 	handler, mock := setupAdminHandler()
 	createReq := CreateRequest{
-		ResearcherAccountID: "534840902377",
-		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123",
+		ResearcherAccountID: "777788889999",
+		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-123",
 		LibraryIDs:          []string{"L2400001"},
 		S3Prefixes:          []string{"s3://bucket/prefix1/"},
 	}
@@ -245,8 +245,8 @@ func TestHandleRevoke_Expired(t *testing.T) {
 	handler, _ := setupAdminHandler()
 	pastExpiry := time.Now().UTC().Add(-1 * time.Hour).Format(time.RFC3339)
 	createReq := CreateRequest{
-		ResearcherAccountID: "534840902377",
-		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123",
+		ResearcherAccountID: "777788889999",
+		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-123",
 		LibraryIDs:          []string{"L2400001"},
 		S3Prefixes:          []string{"s3://bucket/prefix1/"},
 		ExpiresAt:           &pastExpiry,
@@ -281,8 +281,8 @@ func TestHandleExtend_Success(t *testing.T) {
 	handler, _ := setupAdminHandler()
 	futureExpiry := time.Now().UTC().Add(24 * time.Hour).Format(time.RFC3339)
 	createReq := CreateRequest{
-		ResearcherAccountID: "534840902377",
-		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123",
+		ResearcherAccountID: "777788889999",
+		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-123",
 		LibraryIDs:          []string{"L2400001"},
 		S3Prefixes:          []string{"s3://bucket/prefix1/"},
 		ExpiresAt:           &futureExpiry,
@@ -319,8 +319,8 @@ func TestHandleExtend_NotFound(t *testing.T) {
 func TestHandleExtend_Revoked(t *testing.T) {
 	handler, mock := setupAdminHandler()
 	createReq := CreateRequest{
-		ResearcherAccountID: "534840902377",
-		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123",
+		ResearcherAccountID: "777788889999",
+		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-123",
 		LibraryIDs:          []string{"L2400001"},
 		S3Prefixes:          []string{"s3://bucket/prefix1/"},
 	}
@@ -340,8 +340,8 @@ func TestHandleExtend_Revoked(t *testing.T) {
 func TestHandleExtend_DurationTooShort(t *testing.T) {
 	handler, _ := setupAdminHandler()
 	createReq := CreateRequest{
-		ResearcherAccountID: "534840902377",
-		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123",
+		ResearcherAccountID: "777788889999",
+		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-123",
 		LibraryIDs:          []string{"L2400001"},
 		S3Prefixes:          []string{"s3://bucket/prefix1/"},
 	}
@@ -449,8 +449,8 @@ func TestHandleList_Empty(t *testing.T) {
 func TestHandleList_IncludesStatus(t *testing.T) {
 	handler, mock := setupAdminHandler()
 	createResp, _, _ := handler.HandleCreate(context.Background(), CreateRequest{
-		ResearcherAccountID: "534840902377",
-		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123",
+		ResearcherAccountID: "777788889999",
+		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-123",
 		LibraryIDs:          []string{"L2400001"},
 		S3Prefixes:          []string{"s3://bucket/prefix1/"},
 	})
@@ -468,8 +468,8 @@ func TestHandleList_IncludesStatus(t *testing.T) {
 func TestHandleRequest_CreateRoute(t *testing.T) {
 	handler, _ := setupAdminHandler()
 	body, _ := json.Marshal(CreateRequest{
-		ResearcherAccountID: "534840902377",
-		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123",
+		ResearcherAccountID: "777788889999",
+		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-123",
 		LibraryIDs:          []string{"L2400001"},
 		S3Prefixes:          []string{"s3://bucket/prefix1/"},
 	})
@@ -492,8 +492,8 @@ func TestHandleRequest_CreateRoute(t *testing.T) {
 func TestHandleRequest_ListRoute(t *testing.T) {
 	handler, _ := setupAdminHandler()
 	body, _ := json.Marshal(CreateRequest{
-		ResearcherAccountID: "534840902377",
-		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123",
+		ResearcherAccountID: "777788889999",
+		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-123",
 		LibraryIDs:          []string{"L2400001"},
 		S3Prefixes:          []string{"s3://bucket/prefix1/"},
 	})

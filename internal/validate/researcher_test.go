@@ -26,7 +26,7 @@ func associatedRAM() *stubRAMClient {
 }
 
 func TestCheckRAMAssociation_Active(t *testing.T) {
-	check := checkRAMAssociation(context.Background(), associatedRAM(), "534840902377")
+	check := checkRAMAssociation(context.Background(), associatedRAM(), "777788889999")
 	if !check.Passed {
 		t.Fatalf("expected active association to pass, got: %s", check.Error)
 	}
@@ -38,7 +38,7 @@ func TestCheckRAMAssociation_Missing(t *testing.T) {
 			return &ram.GetResourceShareAssociationsOutput{}, nil
 		},
 	}
-	check := checkRAMAssociation(context.Background(), client, "534840902377")
+	check := checkRAMAssociation(context.Background(), client, "777788889999")
 	if check.Passed {
 		t.Fatal("expected a missing association to fail the check")
 	}
@@ -61,9 +61,9 @@ func TestValidateResearcher_ContinuesOnFailure(t *testing.T) {
 		RAMClient:      ramClient,
 		LambdaClient:   &stubLambdaClient{}, // no functions -> test lambda unavailable
 		S3Client:       &awstest.S3{},       // empty policy -> grant check fails
-		AccountID:      "534840902377",
+		AccountID:      "777788889999",
 		ManifestBucket: "data-control-manifest-bucket",
-		ManifestPrefix: "manifests/534840902377/*",
+		ManifestPrefix: "manifests/777788889999/*",
 	}
 
 	checks := ValidateResearcher(context.Background(), opts)

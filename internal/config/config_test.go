@@ -16,15 +16,15 @@ warehouse:
   database: "mart"
   catalog: "AwsDataCatalog"
 endpoints:
-  authorization: "https://auth.data-control.umccr.org"
-  htsgetBaseUrl: "https://htsget-lattice.data-control.umccr.org"
+  authorization: "https://auth.example.org"
+  htsgetBaseUrl: "https://htsget-lattice.example.org"
 cache:
   ttlCeiling: "2h"
   denyTtl: "30s"
 validation:
   canary:
     libraryId: "L2400001"
-    account: "534840902377"
+    account: "777788889999"
 `
 	path := writeTempConfig(t, content)
 
@@ -45,10 +45,10 @@ validation:
 	if cfg.Warehouse.Catalog != "AwsDataCatalog" {
 		t.Errorf("expected catalog 'AwsDataCatalog', got %q", cfg.Warehouse.Catalog)
 	}
-	if cfg.Endpoints.Authorization != "https://auth.data-control.umccr.org" {
+	if cfg.Endpoints.Authorization != "https://auth.example.org" {
 		t.Errorf("expected authorization endpoint, got %q", cfg.Endpoints.Authorization)
 	}
-	if cfg.Endpoints.HtsgetBaseURL != "https://htsget-lattice.data-control.umccr.org" {
+	if cfg.Endpoints.HtsgetBaseURL != "https://htsget-lattice.example.org" {
 		t.Errorf("expected htsgetBaseUrl endpoint, got %q", cfg.Endpoints.HtsgetBaseURL)
 	}
 	if cfg.Cache.TTLCeiling.Duration != 2*time.Hour {
@@ -63,8 +63,8 @@ validation:
 	if cfg.Validation.Canary.LibraryID != "L2400001" {
 		t.Errorf("expected canary libraryId 'L2400001', got %q", cfg.Validation.Canary.LibraryID)
 	}
-	if cfg.Validation.Canary.Account != "534840902377" {
-		t.Errorf("expected canary account '534840902377', got %q", cfg.Validation.Canary.Account)
+	if cfg.Validation.Canary.Account != "777788889999" {
+		t.Errorf("expected canary account '777788889999', got %q", cfg.Validation.Canary.Account)
 	}
 }
 
@@ -409,8 +409,8 @@ func TestRenderManifestKey(t *testing.T) {
 		{
 			name:      "default template substitutes accountId",
 			template:  DefaultManifestKeyTemplate,
-			accountID: "534840902377",
-			want:      "manifests/534840902377/manifest.json",
+			accountID: "777788889999",
+			want:      "manifests/777788889999/manifest.json",
 		},
 		{
 			name:      "custom template with accountId",
@@ -454,11 +454,11 @@ func TestRenderManifestKey(t *testing.T) {
 
 func TestRenderManifestPrefix(t *testing.T) {
 	m := ManifestConfig{Bucket: "b", KeyTemplate: DefaultManifestKeyTemplate}
-	got, err := m.RenderManifestPrefix("534840902377")
+	got, err := m.RenderManifestPrefix("777788889999")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	want := "manifests/534840902377/*"
+	want := "manifests/777788889999/*"
 	if got != want {
 		t.Errorf("RenderManifestPrefix: expected %q, got %q", want, got)
 	}

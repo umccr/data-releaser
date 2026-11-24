@@ -26,7 +26,7 @@ another team, or fix a config field.
 
 ---
 
-## Data Control Account (916218008751)
+## Data Control Account (999988887777)
 
 This account hosts the authorization service, htsget-rs, VPC Lattice, the
 OrcaVault Lake Formation resource link, the manifest bucket, and one cache bucket
@@ -55,7 +55,7 @@ for the stack itself.
 | Item | Owner | Prerequisite for | How to verify |
 | --- | --- | --- | --- |
 | htsget-rs Lambda and its `[auth.authorization]` callout config pointing at the authorization API (htsget) | elsewhere | CLI, Researcher | `validate` performs an htsget-rs health/service-info request. Manually: hit the htsget-rs service-info endpoint. |
-| A VPC (`UomPrimaryVpc`, `vpc-03e01fb6290012661`) with private subnets that have egress **and a route to S3** (NAT or an S3 gateway endpoint) | elsewhere | Infra, Researcher | `aws ec2 describe-subnets --filters Name=vpc-id,Values=<id>` and `aws ec2 describe-vpc-endpoints --filters Name=vpc-id,Values=<id>`. Neither this repo's stack nor htsget-pipeline creates the VPC or the S3 route; the stack looks it up and the htsget Lambda joins it (`vpcOrName`) so it can reach the private authorization API, and without an S3 route htsget-rs authorizes requests it then cannot serve. |
+| A VPC (the `apiVpcId`, e.g. `vpc-0345678901bcdef02`) with private subnets that have egress **and a route to S3** (NAT or an S3 gateway endpoint) | elsewhere | Infra, Researcher | `aws ec2 describe-subnets --filters Name=vpc-id,Values=<id>` and `aws ec2 describe-vpc-endpoints --filters Name=vpc-id,Values=<id>`. Neither this repo's stack nor the htsget-rs deployment creates the VPC or the S3 route; the stack looks it up and the htsget Lambda joins it (`vpcOrName`) so it can reach the private authorization API, and without an S3 route htsget-rs authorizes requests it then cannot serve. |
 | VPC Lattice service, service network, and RAM share exposing the htsget-rs endpoint (htsget) | elsewhere | Researcher | `aws vpc-lattice list-services` / `list-service-networks`; `aws ram get-resource-shares --resource-owner SELF`. Per-account association is checked by `validate --account <id>`. |
 | Lake Formation `mart` resource-link database, `SELECT`/`DESCRIBE` grants, and Athena workgroup + S3 results location (htsget) | elsewhere | CLI | `validate` runs a probe query (`LIMIT 1` against `mart.bam`) through the Lake Formation share. Manually: `aws athena start-query-execution` against the workgroup. |
 | htsget-rs cross-account read role (used for `s3:GetObject`/`HeadObject` on the Data Account) (htsget) | elsewhere | Researcher | `validate` performs a cross-account `HeadObject` on a known canary object. |
@@ -65,7 +65,7 @@ for the stack itself.
 
 ---
 
-## Warehouse Account (115253169271) — htsget mechanism
+## Warehouse Account (113344556677) — htsget mechanism
 
 Hosts OrcaHouse/OrcaVault. Data Releaser never authenticates into this account; it
 consumes the Mart through the Lake Formation share in the Data Control account.
@@ -80,7 +80,7 @@ consumes the Mart through the Lake Formation share in the Data Control account.
 
 ---
 
-## Data Account (503977275616) — htsget mechanism
+## Data Account (555566667777) — htsget mechanism
 
 Holds the bioinformatics files that htsget-rs serves in place, without copying
 them anywhere.

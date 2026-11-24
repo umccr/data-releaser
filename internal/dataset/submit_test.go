@@ -28,10 +28,10 @@ const (
 	submitDestination   = "hot-cache-cohort-a"
 	submitWorkingBucket = "copy-service-working"
 	submitWorkingPrefix = "copy"
-	submitStateMachine  = "arn:aws:states:ap-southeast-2:916218008751:stateMachine:copy"
+	submitStateMachine  = "arn:aws:states:ap-southeast-2:999988887777:stateMachine:copy"
 	submitRunID         = "01JCOPYRUN0000000000000AAA"
-	submitKeyArn        = "arn:aws:kms:ap-southeast-2:916218008751:key/1111aaaa-2222-bbbb-3333-cccc4444dddd"
-	submitExecutionArn  = "arn:aws:states:ap-southeast-2:916218008751:execution:copy:" + submitRunID
+	submitKeyArn        = "arn:aws:kms:ap-southeast-2:999988887777:key/1111aaaa-2222-bbbb-3333-cccc4444dddd"
+	submitExecutionArn  = "arn:aws:states:ap-southeast-2:999988887777:execution:copy:" + submitRunID
 )
 
 // submitClock pins the clock, so a recorded timestamp and the timestamped name a priced
@@ -40,7 +40,7 @@ var submitClock = time.Date(2026, 5, 6, 7, 8, 9, 0, time.UTC)
 
 func submitConfig() CopyConfig {
 	return CopyConfig{
-		AccountID:           "916218008751",
+		AccountID:           "999988887777",
 		Region:              "ap-southeast-2",
 		StateMachineARN:     submitStateMachine,
 		WorkingBucket:       submitWorkingBucket,
@@ -181,7 +181,7 @@ func pinnedCopies(startedAt time.Time) *awstest.StepFunctions {
 		StartExecutionFn: func(_ context.Context, params *sfn.StartExecutionInput) (*sfn.StartExecutionOutput, error) {
 			started := startedAt
 			return &sfn.StartExecutionOutput{
-				ExecutionArn: aws.String("arn:aws:states:ap-southeast-2:916218008751:execution:copy:" + aws.ToString(params.Name)),
+				ExecutionArn: aws.String("arn:aws:states:ap-southeast-2:999988887777:execution:copy:" + aws.ToString(params.Name)),
 				StartDate:    &started,
 			}, nil
 		},
@@ -606,7 +606,7 @@ func TestPlanCopyRefusals(t *testing.T) {
 // Nothing configured means nothing is reachable, and an operator should learn all of it
 // from one run rather than one resource at a time.
 func TestPlanCopyReportsEveryAbsentPrerequisiteAtOnce(t *testing.T) {
-	_, err := PlanCopy(CopyConfig{AccountID: "916218008751"}, CopyRequest{
+	_, err := PlanCopy(CopyConfig{AccountID: "999988887777"}, CopyRequest{
 		RunID:      submitRunID,
 		DatasetURI: submitDatasetURI,
 	})

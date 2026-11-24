@@ -32,8 +32,13 @@ them and they do not depend on it.
 Everything that varies between environments is a **parameter**, so nothing is
 hardcoded and one source tree deploys to a dev and a prod account
 with no code change. Every parameter lives under the `dataReleaser` key of
-[`cdk.context.json`](cdk.context.json); edit that file to retarget a deployment.
+`cdk.context.json`; edit that file to retarget a deployment.
 No `-c` flags are read, and `cdk.json` carries only CDK feature flags.
+
+Start from the example with `cp cdk.context.example.json cdk.context.json`. The
+real file is gitignored, because it holds your account IDs, VPC and the subnets
+CDK looks up. Keep it with the rest of your deployment configuration, for example
+in a private repository, and copy or link it here before running CDK.
 
 `cdk.context.json` rather than `cdk.json` or `-c` for two reasons. `-c` can only
 carry strings — `cdk`'s help calls it a "contextual *string* parameter", so
@@ -45,8 +50,8 @@ exactly one of them or the wrong one silently wins.
 
 > ⚠️ `cdk context --clear` / `--reset` rewrite the whole file and **delete the
 > hand-authored `dataReleaser` block** along with the lookup cache. Restore it
-> with `git checkout cdk.context.json`, or remove just the `vpc-provider:` entry
-> by hand instead.
+> from your saved copy of the file, or remove just the `vpc-provider:` entry by
+> hand instead.
 
 | Context key               | Meaning                                                                                                               | Default                                     |
 |---------------------------|-----------------------------------------------------------------------------------------------------------------------|---------------------------------------------|
@@ -58,7 +63,7 @@ exactly one of them or the wrong one silently wins.
 | `cacheTtlCeiling`         | Cache TTL ceiling (Go duration)                                                                                       | `1h`                                        |
 | `cacheDenyTtl`            | Negative-cache max-age (Go duration)                                                                                  | `60s`                                       |
 | `provisionOperatorPolicy` | Provision the managed policy an operator assumes to run the CLI                                                       | `false`                                     |
-| `apiVpcId`                | VPC hosting the API's interface endpoint and every Lambda; must be the VPC the htsget-rs Lambda runs in. **Required** | `vpc-03e01fb6290012661`                     |
+| `apiVpcId`                | VPC hosting the API's interface endpoint and every Lambda; must be the VPC the htsget-rs Lambda runs in. **Required** | `vpc-0345678901bcdef02`                     |
 | `copyStateMachineArn`     | State machine performing dataset copies; set it to deploy the copy completion Lambda and its rule                      | unset — neither is deployed                 |
 | `copyWorkingBucketName`   | Bucket the copy orchestration works in, holding its summary of each run. **Required alongside `copyStateMachineArn`**   | —                                           |
 
@@ -69,9 +74,9 @@ read on their own manifest prefix:
 // cdk.context.json
 {
   "dataReleaser": {
-    "account": "916218008751",
+    "account": "999988887777",
     "region": "ap-southeast-2",
-    "apiVpcId": "vpc-03e01fb6290012661",
+    "apiVpcId": "vpc-0345678901bcdef02",
     "researcherAccountIds": ["111111111111", "222222222222"]
   }
 }
@@ -123,7 +128,7 @@ released.
 // cdk.context.json
 {
   "dataReleaser": {
-    "copyStateMachineArn": "arn:aws:states:ap-southeast-2:916218008751:stateMachine:steps-s3-copy",
+    "copyStateMachineArn": "arn:aws:states:ap-southeast-2:999988887777:stateMachine:steps-s3-copy",
     "copyWorkingBucketName": "steps-s3-copy-working"
   }
 }
@@ -183,11 +188,11 @@ Each dataset is one entry in the `datasets` array:
 {
   "dataReleaser": {
     "copyWriterRoleName": "steps-s3-copy-writer-role",
-    "custodianRoleArn": "arn:aws:iam::916218008751:role/dataset-custodian",
+    "custodianRoleArn": "arn:aws:iam::999988887777:role/dataset-custodian",
     "datasets": [
       {
-        "name": "tothill-cup",
-        "datasetUri": "urn:fdc:umccr.org:2025:dataset/tothill/cup"
+        "name": "cohort-a",
+        "datasetUri": "urn:fdc:example.org:2025:dataset/cohort-a"
       }
     ]
   }
@@ -195,7 +200,7 @@ Each dataset is one entry in the `datasets` array:
 ```
 
 ```bash
-cdk deploy HotCache-tothill-cup
+cdk deploy HotCache-cohort-a
 ```
 
 | Context key             | Meaning                                                                                   | Default             |
@@ -223,9 +228,9 @@ delete, so a rename orphans rather than destroys:
 
 - `obscureBucketNames` requires the hash key in the `HOT_CACHE_BUCKET_NAME_HASH_KEY`
   environment variable, and synth fails without it rather than falling back to a
-  legible name. The variable, not context, because `cdk.context.json` is checked in
-  and a checked-in key obscures nothing. The same value must be present on every
-  synth.
+  legible name. The variable, not context, because `cdk.context.json` is normally
+  kept in version control and a key kept there obscures nothing. The same value
+  must be present on every synth.
 - Flipping `obscureBucketNames`, changing the hash key, or editing a `datasetUri`
   all rename the bucket. Once a bucket holds a copy someone is reading, pin its
   name with the dataset's `bucketName` and the derivation stops mattering.
@@ -379,7 +384,7 @@ with `validation.skipAuthorizationCheck`.
 ### Prerequisites — no escape hatch
 
 `apiVpcId` must be a VPC with **private subnets that have egress** — the same VPC
-the htsget-rs Lambda is attached to via `vpcOrName` in htsget-pipeline. The stack
+the htsget-rs Lambda is attached to in its own deployment. The stack
 looks that VPC up rather than creating it, and touches nothing in it beyond the
 interface endpoint and security groups (the endpoint's allows 443 from the VPC
 CIDR; the Lambdas' allows 443 egress only). It does
@@ -395,7 +400,7 @@ public again requires editing the stack — a reviewable code change, not a
 context value.
 
 The VPC lookup is resolved against the real account **once** and cached in
-`cdk.context.json` (checked in), beside the `dataReleaser` configuration block,
+`cdk.context.json`, beside the `dataReleaser` configuration block,
 so `cdk synth` works with no credentials. Only a lookup for a new
 account/region/VPC needs credentials to populate the cache.
 

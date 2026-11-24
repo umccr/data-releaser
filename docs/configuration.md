@@ -137,7 +137,7 @@ overwriting the other. The dataset document's template lives at
 | `manifest.keyTemplate` | optional | `manifests/{accountId}/manifest.json` | Per-account object key template for the htsget document. Only the `{accountId}` placeholder is supported; any other `{...}` token is rejected. |
 
 Each researcher's manifest is written at the rendered key, e.g.
-`manifests/534840902377/manifest.json`.
+`manifests/777788889999/manifest.json`.
 
 ## htsget mechanism sections
 
@@ -205,7 +205,7 @@ One entry per researcher account, keyed by account ID.
 
 | Field | Required | Default | Description |
 | --- | --- | --- | --- |
-| `researchers.<accountId>.targetVpcArn` | **required** for each entry | — | ARN of the researcher VPC associated with the htsget VPC Lattice service network, e.g. `arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-0123456789abcdef0`. This is the value the authorization callout is keyed on and it must be the *EC2 VPC* ARN VPC Lattice puts on the invocation event — not a `vpc-lattice` ARN. The lookup is an exact match, so any other value silently denies every request. Overridable per invocation with `--target-vpc-arn`. |
+| `researchers.<accountId>.targetVpcArn` | **required** for each entry | — | ARN of the researcher VPC associated with the htsget VPC Lattice service network, e.g. `arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-0123456789abcdef0`. This is the value the authorization callout is keyed on and it must be the *EC2 VPC* ARN VPC Lattice puts on the invocation event — not a `vpc-lattice` ARN. The lookup is an exact match, so any other value silently denies every request. Overridable per invocation with `--target-vpc-arn`. |
 
 Every entry is checked whenever a command declares the `researchers` section, not
 just the account being shared with, because a malformed ARN produces a share that
@@ -290,14 +290,14 @@ profile: "data-control"
 # Shared: the account and region every resource lives in. Required by the s3
 # commands, which write the account into policy documents as a principal and
 # condition a researcher's decrypt permission on the region.
-account: "916218008751"
+account: "999988887777"
 region:  "ap-southeast-2"
 
 ledger:                                 # shared: the record store both mechanisms write to
   table: "data-releaser-ShareRecords"   # optional; "<namePrefix>-ShareRecords" from the deployment
 
 manifest:                                              # shared bucket, per-mechanism key prefix
-  bucket:      "data-releaser-manifests-916218008751"  # from the stack output; never hard-code
+  bucket:      "data-releaser-manifests-999988887777"  # from the stack output; never hard-code
   keyTemplate: "manifests/{accountId}/manifest.json"   # optional; the htsget document
 
 # --- htsget mechanism ------------------------------------------------------
@@ -308,8 +308,8 @@ warehouse:                          # OrcaVault Mart via Athena (Lake Formation 
   catalog:         "AwsDataCatalog" # optional — Glue catalog; defaults to AwsDataCatalog
 
 endpoints:
-  authorization:   "https://auth.data-control.umccr.org"           # REQUIRED
-  htsgetBaseUrl:   "https://htsget-lattice.data-control.umccr.org"  # REQUIRED
+  authorization:   "https://auth.example.org"           # REQUIRED
+  htsgetBaseUrl:   "https://htsget-lattice.example.org"  # REQUIRED
   apiGatewayRestApiId: "abc123def4"  # from the stack output; used by the validate stage check # pragma: allowlist secret
   apiGatewayStageName: "prod"        # from the stack output; defaults to "prod"
 
@@ -322,24 +322,24 @@ validation:
   skipAuthorizationCheck: true  # the authorization API is private to the data account VPC
   canary:                       # optional — used only by `validate`
     libraryId: "L2400999"
-    account:   "534840902377"
-    bucket:    "umccr-data-bucket"
+    account:   "777788889999"
+    bucket:    "example-data-bucket"
     key:       "canary/known-object.bam"
 
 researchers:                      # the EC2 VPC ARN the authorization callout is keyed on
-  "534840902377":
-    targetVpcArn: "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-0123456789abcdef0"
+  "777788889999":
+    targetVpcArn: "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-0123456789abcdef0"
 
 # --- direct-read s3 mechanism ---------------------------------------------
 
 s3:
   copy:                           # the copy orchestration, deployed separately
-    stateMachineArn: "arn:aws:states:ap-southeast-2:916218008751:stateMachine:steps-s3-copy"  # REQUIRED
-    workingBucket:   "steps-s3-copy-working-916218008751"  # REQUIRED — belongs to that installation
+    stateMachineArn: "arn:aws:states:ap-southeast-2:999988887777:stateMachine:steps-s3-copy"  # REQUIRED
+    workingBucket:   "steps-s3-copy-working-999988887777"  # REQUIRED — belongs to that installation
     workingBucketPrefix: ""       # optional — the prefix the orchestration was deployed with
     writerRoleName:  "steps-s3-copy-writer"  # REQUIRED — each dataset key policy names it
-    # account:           "916218008751"  # optional — set if installed in another account
-    # writerRoleAccount: "916218008751"  # optional — set if that role lives elsewhere
+    # account:           "999988887777"  # optional — set if installed in another account
+    # writerRoleAccount: "999988887777"  # optional — set if that role lives elsewhere
   source:                         # the external S3-compatible store
     endpointUrl:       "https://ceph.example.org"  # REQUIRED
     region:            "us-east-1"                 # optional — some value is usually required
@@ -351,7 +351,7 @@ s3:
     #   "s3://ceph-bucket/cohort-a/": "data-releaser-dataset-0123456789abcdef"
   manifest:
     keyTemplate: "datasets/{accountId}/manifest.json"  # optional; bucket defaults to manifest.bucket
-  custodianRoleArn: "arn:aws:iam::916218008751:role/DatasetCustodian"  # optional — the kill switch
+  custodianRoleArn: "arn:aws:iam::999988887777:role/DatasetCustodian"  # optional — the kill switch
 ```
 
 ## Mapping to stack outputs

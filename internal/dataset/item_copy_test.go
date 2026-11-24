@@ -23,10 +23,10 @@ const (
 	recordTableName     = "ShareRecords"
 	recordDataset       = "s3://ceph-source/datasets/cohort-a/"
 	recordCacheBucket   = "hot-cache-cohort-a"
-	recordKeyArn        = "arn:aws:kms:ap-southeast-2:916218008751:key/1a2b3c4d-5e6f-7081-92a3-b4c5d6e7f809"
+	recordKeyArn        = "arn:aws:kms:ap-southeast-2:999988887777:key/1a2b3c4d-5e6f-7081-92a3-b4c5d6e7f809"
 	recordResearcher    = "123456789012"
 	recordTargetVpc     = "vpc-0a1b2c3d4e5f60718"
-	recordCopyExecution = "arn:aws:states:ap-southeast-2:916218008751:execution:copy:cohort-a"
+	recordCopyExecution = "arn:aws:states:ap-southeast-2:999988887777:execution:copy:cohort-a"
 	recordCopySummary   = "s3://hot-cache-cohort-a/.copy-control/summary.csv"
 )
 

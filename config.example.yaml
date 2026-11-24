@@ -1,0 +1,74 @@
+# config.example.yaml — copy to config.yaml and replace the example values with your
+# deployment's. config.yaml is gitignored. Every field is described in
+# docs/configuration.md. No secrets live here.
+
+# Single Data Control identity. Any profile the AWS SDK understands (SSO,
+# credential_process, ...). Omit to use the default credential chain.
+# Overridable at runtime with --profile.
+profile: "data-control"
+
+# Shared: the account and region every resource lives in. Required by the s3
+# commands, which write the account into policy documents as a principal and
+# condition a researcher's decrypt permission on the region.
+account: "999988887777"
+region:  "ap-southeast-2"
+
+ledger:                                 # shared: the record store both mechanisms write to
+  table: "data-releaser-ShareRecords"   # optional; "<namePrefix>-ShareRecords" from the deployment
+
+manifest:                                              # shared bucket, per-mechanism key prefix
+  bucket:      "data-releaser-manifests-999988887777"  # from the stack output; never hard-code
+  keyTemplate: "manifests/{accountId}/manifest.json"   # optional; the htsget document
+
+# --- htsget mechanism ------------------------------------------------------
+
+warehouse:                          # OrcaVault Mart via Athena (Lake Formation share)
+  athenaWorkgroup: "primary"        # REQUIRED — workgroup in the Data Control (consumer) account
+  database:        "mart"           # REQUIRED — Lake Formation resource-link database
+  catalog:         "AwsDataCatalog" # optional — Glue catalog; defaults to AwsDataCatalog
+
+endpoints:
+  authorization:   "https://auth.example.org"           # REQUIRED
+  htsgetBaseUrl:   "https://htsget-lattice.example.org"  # REQUIRED
+  apiGatewayRestApiId: "abc123def4"  # from the stack output; used by the validate stage check # pragma: allowlist secret
+  apiGatewayStageName: "prod"        # from the stack output; defaults to "prod"
+
+cache:
+  ttlCeiling: "1h"    # optional — s-maxage ceiling for allow responses (default 1h)
+  denyTtl:    "60s"   # optional — negative cache for deny responses (default 60s)
+
+validation:
+  skipHtsgetCheck: true         # htsget-rs only resolves inside a VPC on the lattice network
+  skipAuthorizationCheck: true  # the authorization API is private to the data account VPC
+  canary:                       # optional — used only by `validate`
+    libraryId: "L2400999"
+    account:   "777788889999"
+    bucket:    "example-data-bucket"
+    key:       "canary/known-object.bam"
+
+researchers:                      # the EC2 VPC ARN the authorization callout is keyed on
+  "777788889999":
+    targetVpcArn: "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-0123456789abcdef0"
+
+# --- direct-read s3 mechanism ---------------------------------------------
+
+s3:
+  copy:                           # the copy orchestration, deployed separately
+    stateMachineArn: "arn:aws:states:ap-southeast-2:999988887777:stateMachine:steps-s3-copy"  # REQUIRED
+    workingBucket:   "steps-s3-copy-working-999988887777"  # REQUIRED — belongs to that installation
+    workingBucketPrefix: ""       # optional — the prefix the orchestration was deployed with
+    writerRoleName:  "steps-s3-copy-writer"  # REQUIRED — each dataset key policy names it
+    # account:           "999988887777"  # optional — set if installed in another account
+    # writerRoleAccount: "999988887777"  # optional — set if that role lives elsewhere
+  source:                         # the external S3-compatible store
+    endpointUrl:       "https://ceph.example.org"  # REQUIRED
+    region:            "us-east-1"                 # optional — some value is usually required
+    credentialsSecret: "ceph/data-releaser"        # REQUIRED — the identifier only # pragma: allowlist secret
+  hotCache:
+    namePrefix:         "data-releaser"  # optional — must match the deployment's prefix
+    obscureBucketNames: false            # optional — needs HOT_CACHE_BUCKET_NAME_HASH_KEY when true
+    # buckets:                           # optional — pin a dataset to an explicit bucket
+    #   "s3://ceph-bucket/cohort-a/": "data-releaser-dataset-0123456789abcdef"
+  manifest:
+    keyTemplate: "datasets/{accountId}/manifest.json"  # optional; bucket defaults to manifest.bucket
+  custodianRoleArn: "arn:aws:iam::999988887777:role/DatasetCustodian"  # optional — the kill switch

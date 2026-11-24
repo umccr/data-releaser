@@ -203,7 +203,7 @@ misreport one or the other.
 ```json
 {
   "note": "Descriptive only: this document records the dataset access held by this account at the time it was generated. Access is enforced by the cache bucket's policy and by the policy of the key encrypting it. Nothing here is consulted when a read is authorised, and changing this document neither grants nor withdraws anything.",
-  "accountId": "534840902377",
+  "accountId": "777788889999",
   "generatedAt": "2024-01-15T04:05:06Z",
   "datasets": [
     {
@@ -213,7 +213,7 @@ misreport one or the other.
       "region": "ap-southeast-2",
       "prefix": "",
       "excludedPrefix": "_control/",
-      "keyArn": "arn:aws:kms:ap-southeast-2:916218008751:key/8c1d0f42-1b6e-4a7f-9d3c-52ea0b7f6a10",
+      "keyArn": "arn:aws:kms:ap-southeast-2:999988887777:key/8c1d0f42-1b6e-4a7f-9d3c-52ea0b7f6a10",
       "targetVpcId": "vpc-0123456789abcdef0",
       "expiresAt": "2024-02-14T04:05:06Z"
     }

@@ -263,7 +263,7 @@ func TestSeveralGrantsCoexistOnOneCopy(t *testing.T) {
 	c := stagedCopy(t, table, copyIdentifier(1))
 
 	held := make([]*Grant, 0, 3)
-	for _, account := range []string{"123456789012", "534840902377", "916218008751"} {
+	for _, account := range []string{"123456789012", "777788889999", "999988887777"} {
 		granted, err := grants.Create(ctx, c, GrantRequest{
 			ResearcherAccountID: account,
 			TargetVpcID:         recordTargetVpc,

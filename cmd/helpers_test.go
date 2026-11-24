@@ -46,8 +46,8 @@ func TestParseDuration(t *testing.T) {
 }
 
 func TestResolveTargetVpcArn(t *testing.T) {
-	const account = "534840902377"
-	const arn = "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-0123456789abcdef0"
+	const account = "777788889999"
+	const arn = "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-0123456789abcdef0"
 
 	cfg := &config.Config{
 		Researchers: map[string]config.ResearcherConfig{
@@ -56,7 +56,7 @@ func TestResolveTargetVpcArn(t *testing.T) {
 	}
 
 	// The flag takes precedence over the config entry.
-	flagArn := "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-aaaaaaaaaaaaaaaaa"
+	flagArn := "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-aaaaaaaaaaaaaaaaa"
 	got, err := resolveTargetVpcArn(cfg, flagArn, account)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -81,7 +81,7 @@ func TestResolveTargetVpcArn(t *testing.T) {
 	}
 
 	// The legacy vpc-lattice ARN shape is rejected — VPC Lattice reports the EC2 VPC ARN.
-	legacy := "arn:aws:vpc-lattice:ap-southeast-2:534840902377:servicenetworkserviceassociation/*"
+	legacy := "arn:aws:vpc-lattice:ap-southeast-2:777788889999:servicenetworkserviceassociation/*"
 	if _, err := resolveTargetVpcArn(cfg, legacy, account); err == nil {
 		t.Error("expected a vpc-lattice service-network-association ARN to be rejected")
 	}

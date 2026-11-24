@@ -110,7 +110,7 @@ researcher reads through htsget-rs.
 **Example — a mutating verb invoked bare:**
 
 ```sh
-$ data-releaser share --libraries L2400001,L2400002 --account 534840902377
+$ data-releaser share --libraries L2400001,L2400002 --account 777788889999
 Error: data-releaser share requires a mechanism (s3 or htsget) and never infers one from
 the other inputs given; run one of: data-releaser share s3, data-releaser share htsget
 # exit status 1
@@ -283,8 +283,8 @@ Dataset staging started:
   Copy ID:      01JQ8XABCDEF0123456789ABCD
   Dataset:      s3://source-bucket/datasets/cohort-a/
   Bucket:       data-control-dataset-3f2a91c7b4e05d68
-  Key:          arn:aws:kms:ap-southeast-2:916218008751:key/2b1c9e0a-...
-  Execution:    arn:aws:states:ap-southeast-2:916218008751:execution:steps-s3-copy:01JQ8X...
+  Key:          arn:aws:kms:ap-southeast-2:999988887777:key/2b1c9e0a-...
+  Execution:    arn:aws:states:ap-southeast-2:999988887777:execution:steps-s3-copy:01JQ8X...
   Instructions: s3://steps-s3-copy-working/data-releaser/01JQ8XABCDEF0123456789ABCD/
   State:        copying
 
@@ -303,7 +303,7 @@ $ data-releaser stage s3 --dataset-uri s3://source-bucket/datasets/cohort-a/ --d
 Priced run started; no data is being copied:
   Dataset:   s3://source-bucket/datasets/cohort-a/
   Bucket:    data-control-dataset-3f2a91c7b4e05d68
-  Execution: arn:aws:states:ap-southeast-2:916218008751:execution:steps-s3-copy:01JQ8Y...
+  Execution: arn:aws:states:ap-southeast-2:999988887777:execution:steps-s3-copy:01JQ8Y...
   Estimate:  s3://steps-s3-copy-working/data-releaser/... (written once every object has been priced)
 
 Every source object is checked and the destination is written to, so the run
@@ -436,19 +436,19 @@ to withdraw instead.
 
 ```sh
 $ data-releaser share s3 --dataset-uri s3://source-bucket/datasets/cohort-a/ \
-    --account 534840902377 --target-vpc-id vpc-0123456789abcdef0 --expiry 30d
+    --account 777788889999 --target-vpc-id vpc-0123456789abcdef0 --expiry 30d
 Dataset released successfully:
   Grant ID:    01JQ8XABCDEF0123456789ABCD
   Copy ID:     01JQ8WBBBB0000000000000000
   Dataset:     s3://source-bucket/datasets/cohort-a/
-  Account:     534840902377
+  Account:     777788889999
   Target VPC:  vpc-0123456789abcdef0
   Bucket:      data-control-dataset-3f2a91c7b4e05d68
-  Key:         arn:aws:kms:ap-southeast-2:916218008751:key/2b1c9e0a-...
+  Key:         arn:aws:kms:ap-southeast-2:999988887777:key/2b1c9e0a-...
   Expiry:      2026-09-27T04:00:00Z
   Deployed:    2 grant(s) on this copy
   Applied:     key policy, bucket policy
-  Manifest:    1 dataset(s) described to account 534840902377
+  Manifest:    1 dataset(s) described to account 777788889999
 Note: a grant can only be confirmed by reading an object from inside the target VPC;
 a wrong VPC identifier, a passed expiry, and a key that cannot decrypt all present as
 the same access denial.
@@ -499,8 +499,8 @@ whole.
 
 ```sh
 $ data-releaser share s3 --dataset-uri s3://source-bucket/datasets/cohort-a/ \
-    --account 534840902377 --target-vpc-id vpc-0123456789abcdef0 --expiry 30d
-Error: account 534840902377 already reads dataset "s3://source-bucket/datasets/cohort-a/"
+    --account 777788889999 --target-vpc-id vpc-0123456789abcdef0 --expiry 30d
+Error: account 777788889999 already reads dataset "s3://source-bucket/datasets/cohort-a/"
 from vpc-0123456789abcdef0 under grant 01JQ8XABCDEF0123456789ABCD, which runs until
 2026-09-27T04:00:00Z. A second grant would deploy statements saying the same thing and
 leave two records where one describes the access, so nothing was written. Move that
@@ -549,10 +549,10 @@ manifest to the researcher account.
 **Example — create a 30-day share:**
 
 ```sh
-$ data-releaser share htsget --libraries L2400001,L2400002 --account 534840902377 --expiry 30d
+$ data-releaser share htsget --libraries L2400001,L2400002 --account 777788889999 --expiry 30d
 Share created successfully:
   Share ID:  01JQ8XABCDEF0123456789ABCD
-  Account:   534840902377
+  Account:   777788889999
   Libraries: 2 (L2400001, L2400002)
   Expiry:    2026-09-27T04:00:00Z
 ```
@@ -560,10 +560,10 @@ Share created successfully:
 **Example — unlimited share (no `--expiry`):**
 
 ```sh
-$ data-releaser share htsget --libraries L2400001 --account 534840902377
+$ data-releaser share htsget --libraries L2400001 --account 777788889999
 Share created successfully:
   Share ID:  01JQ8XABCDEF0123456789ABCD
-  Account:   534840902377
+  Account:   777788889999
   Libraries: 1 (L2400001)
   Expiry:    unlimited
 ```
@@ -571,10 +571,10 @@ Share created successfully:
 **Example — idempotent re-run (same libraries + account as an active share):**
 
 ```sh
-$ data-releaser share htsget --libraries L2400001,L2400002 --account 534840902377 --expiry 30d
+$ data-releaser share htsget --libraries L2400001,L2400002 --account 777788889999 --expiry 30d
 Existing share reused (idempotent match):
   Share ID:  01JQ8XABCDEF0123456789ABCD
-  Account:   534840902377
+  Account:   777788889999
   Libraries: 2 (L2400001, L2400002)
   Expiry:    2026-09-27T04:00:00Z
 ```
@@ -587,7 +587,7 @@ new share instead.
 **Example — resolution problem (aborts, no partial share):**
 
 ```sh
-$ data-releaser share htsget --libraries L2400001,L9999999 --account 534840902377
+$ data-releaser share htsget --libraries L2400001,L9999999 --account 777788889999
 Error: cannot share libraries:
   library ID L9999999 may not exist, may not be aligned yet, or may have reads that are archived
 # exit status 1
@@ -695,14 +695,14 @@ Grant expiry moved:
   Grant ID:    01JQ8XABCDEF0123456789ABCD
   Copy ID:     01JQ8WBBBB0000000000000000
   Dataset:     s3://source-bucket/datasets/cohort-a/
-  Account:     534840902377
+  Account:     777788889999
   Target VPC:  vpc-0123456789abcdef0
   State:       granted
   Was:         2026-09-27T04:00:00Z
   Expiry:      2026-10-27T04:00:00Z
   Deployed:    2 grant(s) on this copy
   Applied:     key policy, bucket policy
-  Manifest:    1 dataset(s) described to account 534840902377
+  Manifest:    1 dataset(s) described to account 777788889999
 ```
 
 **Example — a grant made without an expiry:**
@@ -713,7 +713,7 @@ No expiry applies; nothing was changed:
   Grant ID:    01JQ8XABCDEF0123456789ABCD
   Copy ID:     01JQ8WBBBB0000000000000000
   Dataset:     s3://source-bucket/datasets/cohort-a/
-  Account:     534840902377
+  Account:     777788889999
   Target VPC:  vpc-0123456789abcdef0
   Expiry:      unlimited
 
@@ -765,7 +765,7 @@ every request — so the record is the whole of the change.
 $ data-releaser extend htsget 01JQ8XABCDEF0123456789ABCD --duration 60d
 Share extended successfully:
   Share ID:   01JQ8XABCDEF0123456789ABCD
-  Account:    534840902377
+  Account:    777788889999
   Libraries:  2 (L2400001, L2400002)
   New Expiry: 2026-10-27T02:30:00Z
 ```
@@ -870,15 +870,15 @@ Dataset access withdrawn:
   Grant ID:    01JQ8XABCDEF0123456789ABCD
   Copy ID:     01JQ8WBBBB0000000000000000
   Dataset:     s3://source-bucket/datasets/cohort-a/
-  Account:     534840902377
+  Account:     777788889999
   Target VPC:  vpc-0123456789abcdef0
   Bucket:      data-control-dataset-3f2a91c7b4e05d68
-  Key:         arn:aws:kms:ap-southeast-2:916218008751:key/2b1c9e0a-...
+  Key:         arn:aws:kms:ap-southeast-2:999988887777:key/2b1c9e0a-...
   Was until:   2026-10-27T04:00:00Z
   Withdrawn:   2026-08-28T02:30:00Z
   Deployed:    1 grant(s) on this copy
   Applied:     bucket policy, key policy
-  Manifest:    removed; account 534840902377 holds no dataset access to describe
+  Manifest:    removed; account 777788889999 holds no dataset access to describe
 
 The objects in data-control-dataset-3f2a91c7b4e05d68 and the key encrypting them are
 untouched: nothing was deleted, and the copy is still readable by this account. The
@@ -1033,16 +1033,16 @@ Purging dataset s3://source-bucket/datasets/cohort-a/ destroys the copy of it he
 
 Destroyed with it (1 copy record(s), 2 grant(s)):
 MECHANISM  ID                          ACCOUNT       SHARED                                 TARGET VPC             CREATED               EXPIRY                STATE
-s3         01JQ8XABCDEF0123456789ABCD  534840902377  s3://source-bucket/datasets/cohort-a/  vpc-0123456789abcdef0  2026-08-01T04:00:00Z  2026-10-27T04:00:00Z  granted
+s3         01JQ8XABCDEF0123456789ABCD  777788889999  s3://source-bucket/datasets/cohort-a/  vpc-0123456789abcdef0  2026-08-01T04:00:00Z  2026-10-27T04:00:00Z  granted
 s3         01JQ8WBBBB0000000000000000  -             s3://source-bucket/datasets/cohort-a/  -                      2026-07-20T01:00:00Z  -                     staged
 s3         01JQ7WZZZZ0000000000000000  111111111111  s3://source-bucket/datasets/cohort-a/  vpc-0aaaaaaaaaaaaaaa1  2026-05-01T00:00:00Z  2026-06-01T00:00:00Z  revoked
 
 What is destroyed:
   Bucket:  data-control-dataset-3f2a91c7b4e05d68
-  Key:     arn:aws:kms:ap-southeast-2:916218008751:key/2b1c9e0a-... (Enabled)
+  Key:     arn:aws:kms:ap-southeast-2:999988887777:key/2b1c9e0a-... (Enabled)
 
 Access withdrawn first (1 grant(s) still deployed):
-  01JQ8XABCDEF0123456789ABCD to account 534840902377 from vpc-0123456789abcdef0, expiry 2026-10-27T04:00:00Z
+  01JQ8XABCDEF0123456789ABCD to account 777788889999 from vpc-0123456789abcdef0, expiry 2026-10-27T04:00:00Z
 
 Deleting the key is how the copy is destroyed: every object in the bucket above
 is encrypted under it and nothing can read them once it is gone -- not the
@@ -1055,12 +1055,12 @@ is beyond reach of this or any other command.
 
 To destroy this copy, type the dataset URI (s3://source-bucket/datasets/cohort-a/). Anything else abandons the purge: s3://source-bucket/datasets/cohort-a/
 
-Access withdrawn: grant 01JQ8XABCDEF0123456789ABCD no longer gives account 534840902377 anything (bucket policy, key policy)
-Key scheduled for deletion: arn:aws:kms:ap-southeast-2:916218008751:key/2b1c9e0a-..., irreversible from 2026-09-27T02:30:00Z
+Access withdrawn: grant 01JQ8XABCDEF0123456789ABCD no longer gives account 777788889999 anything (bucket policy, key policy)
+Key scheduled for deletion: arn:aws:kms:ap-southeast-2:999988887777:key/2b1c9e0a-..., irreversible from 2026-09-27T02:30:00Z
 
 Dataset purged:
   Dataset:  s3://source-bucket/datasets/cohort-a/
-  Key:      arn:aws:kms:ap-southeast-2:916218008751:key/2b1c9e0a-...
+  Key:      arn:aws:kms:ap-southeast-2:999988887777:key/2b1c9e0a-...
   Bucket:   data-control-dataset-3f2a91c7b4e05d68
   Copy:     01JQ8WBBBB0000000000000000 now purged, irreversible from 2026-09-27T02:30:00Z
 
@@ -1173,21 +1173,21 @@ Restoring dataset s3://source-bucket/datasets/cohort-a/ takes back the purge of 
 
 Staged again (1 of 1 copy record(s), 2 grant(s) left withdrawn):
 MECHANISM  ID                          ACCOUNT       SHARED                                 TARGET VPC             CREATED               EXPIRY                STATE
-s3         01JQ8XABCDEF0123456789ABCD  534840902377  s3://source-bucket/datasets/cohort-a/  vpc-0123456789abcdef0  2026-08-01T04:00:00Z  2026-10-27T04:00:00Z  revoked
+s3         01JQ8XABCDEF0123456789ABCD  777788889999  s3://source-bucket/datasets/cohort-a/  vpc-0123456789abcdef0  2026-08-01T04:00:00Z  2026-10-27T04:00:00Z  revoked
 s3         01JQ8WBBBB0000000000000000  -             s3://source-bucket/datasets/cohort-a/  -                      2026-07-20T01:00:00Z  -                     purged
 s3         01JQ7WZZZZ0000000000000000  111111111111  s3://source-bucket/datasets/cohort-a/  vpc-0aaaaaaaaaaaaaaa1  2026-05-01T00:00:00Z  2026-06-01T00:00:00Z  revoked
 
 What is recovered:
   Bucket:  data-control-dataset-3f2a91c7b4e05d68
-  Key:     arn:aws:kms:ap-southeast-2:916218008751:key/2b1c9e0a-... (PendingDeletion)
+  Key:     arn:aws:kms:ap-southeast-2:999988887777:key/2b1c9e0a-... (PendingDeletion)
            its deletion becomes irreversible at 2026-09-27T02:30:00Z
 
-Key deletion cancelled: arn:aws:kms:ap-southeast-2:916218008751:key/2b1c9e0a-...
-Key enabled: arn:aws:kms:ap-southeast-2:916218008751:key/2b1c9e0a-... (Enabled)
+Key deletion cancelled: arn:aws:kms:ap-southeast-2:999988887777:key/2b1c9e0a-...
+Key enabled: arn:aws:kms:ap-southeast-2:999988887777:key/2b1c9e0a-... (Enabled)
 
 Dataset restored:
   Dataset:  s3://source-bucket/datasets/cohort-a/
-  Key:      arn:aws:kms:ap-southeast-2:916218008751:key/2b1c9e0a-...
+  Key:      arn:aws:kms:ap-southeast-2:999988887777:key/2b1c9e0a-...
   Bucket:   data-control-dataset-3f2a91c7b4e05d68
   Copy:     01JQ8WBBBB0000000000000000 now staged
 
@@ -1398,11 +1398,11 @@ the dataset URI for an s3 copy or grant.
 ```sh
 $ data-releaser list
 MECHANISM  ID                          ACCOUNT       SHARED                                 TARGET VPC             CREATED               EXPIRY                STATE
-s3         01JQ8XABCDEF0123456789ABCD  534840902377  s3://source-bucket/datasets/cohort-a/  vpc-0123456789abcdef0  2026-08-01T04:00:00Z  2026-10-27T04:00:00Z  granted
+s3         01JQ8XABCDEF0123456789ABCD  777788889999  s3://source-bucket/datasets/cohort-a/  vpc-0123456789abcdef0  2026-08-01T04:00:00Z  2026-10-27T04:00:00Z  granted
 s3         01JQ8XAAAA0000000000000000  111111111111  s3://source-bucket/datasets/cohort-a/  vpc-0aaaaaaaaaaaaaaa1  2026-08-01T03:00:00Z  unlimited             granted
 s3         01JQ8WBBBB0000000000000000  -             s3://source-bucket/datasets/cohort-a/  -                      2026-07-20T01:00:00Z  -                     staged
 s3         01JQ8WCCCC0000000000000000  -             s3://source-bucket/datasets/cohort-b/  -                      2026-07-19T01:00:00Z  -                     copying
-htsget     01JQ7WZZZZ0000000000000000  534840902377  L2300009                               vpc-0123456789abcdef0  2026-06-01T00:00:00Z  unlimited             active
+htsget     01JQ7WZZZZ0000000000000000  777788889999  L2300009                               vpc-0123456789abcdef0  2026-06-01T00:00:00Z  unlimited             active
 htsget     01JQ6VYYYY0000000000000000  111111111111  L2200001,L2200002,L2200003 (+2 more)   vpc-0aaaaaaaaaaaaaaa1  2026-05-01T00:00:00Z  2026-05-15T00:00:00Z  expired
 ```
 
@@ -1522,7 +1522,7 @@ deployment does not look partially broken.
 **Example (abridged):**
 
 ```sh
-$ data-releaser validate --account 534840902377
+$ data-releaser validate --account 777788889999
 htsget mechanism:
 ─────────────────
   [PASS] Credential Resolution (STS GetCallerIdentity)
@@ -1534,7 +1534,7 @@ htsget mechanism:
 s3 mechanism:
 ─────────────
   [PASS] Dataset ledger readable (data-releaser-ShareRecords)
-  [PASS] Copy orchestration reachability (arn:aws:states:ap-southeast-2:916218008751:stateMachine:steps-s3-copy)
+  [PASS] Copy orchestration reachability (arn:aws:states:ap-southeast-2:999988887777:stateMachine:steps-s3-copy)
   [PASS] Copy working bucket writability (steps-s3-copy-working)
   [PASS] Source store credentials secret (source-store/credentials)
   [PASS] Source store endpoint (https://ceph.example.org)
@@ -1566,7 +1566,7 @@ s3 mechanism, policies re-applied from the ledger:
   [PASS] Ledger policies re-applied: s3://source-bucket/datasets/cohort-a/
          replaced the key policy of arn:aws:kms:... and the bucket policy of
          data-control-dataset-3f2a91c7b4e05d68. The deployed access is now what the ledger
-         describes: account 534840902377 reading from vpc-0123456789abcdef0, until
+         describes: account 777788889999 reading from vpc-0123456789abcdef0, until
          2026-10-27T04:00:00Z, and account 111111111111 reading from
          vpc-0aaaaaaaaaaaaaaa1, with no expiry
 ```

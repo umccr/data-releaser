@@ -51,7 +51,7 @@ func TestGenerate_AllExpiredOrRevoked_ReturnsNil(t *testing.T) {
 }
 
 func TestGenerate_SingleActiveShare(t *testing.T) {
-	g := NewGenerator("https://htsget-lattice.data-control.umccr.org")
+	g := NewGenerator("https://htsget-lattice.example.org")
 	now := time.Date(2026, 7, 10, 4, 0, 0, 0, time.UTC)
 	expiry := time.Date(2026, 8, 10, 4, 0, 0, 0, time.UTC)
 
@@ -74,9 +74,9 @@ func TestGenerate_SingleActiveShare(t *testing.T) {
 		t.Fatal("expected non-nil manifest")
 	}
 
-	if result.HtsgetBaseUrl != "https://htsget-lattice.data-control.umccr.org" {
+	if result.HtsgetBaseUrl != "https://htsget-lattice.example.org" {
 		t.Errorf("HtsgetBaseUrl: expected %q, got %q",
-			"https://htsget-lattice.data-control.umccr.org", result.HtsgetBaseUrl)
+			"https://htsget-lattice.example.org", result.HtsgetBaseUrl)
 	}
 	if !result.GeneratedAt.Equal(now) {
 		t.Errorf("GeneratedAt: expected %v, got %v", now, result.GeneratedAt)
@@ -359,7 +359,7 @@ func TestGenerate_MultipleSharesMultipleLibraries(t *testing.T) {
 }
 
 func TestGenerate_JSONOutputConformsToSchema(t *testing.T) {
-	g := NewGenerator("https://htsget-lattice.data-control.umccr.org")
+	g := NewGenerator("https://htsget-lattice.example.org")
 	now := time.Date(2026, 7, 10, 4, 0, 0, 0, time.UTC)
 	expiry := time.Date(2026, 8, 10, 4, 0, 0, 0, time.UTC)
 
@@ -393,7 +393,7 @@ func TestGenerate_JSONOutputConformsToSchema(t *testing.T) {
 		t.Fatalf("failed to unmarshal manifest: %v", err)
 	}
 
-	if decoded.HtsgetBaseUrl != "https://htsget-lattice.data-control.umccr.org" {
+	if decoded.HtsgetBaseUrl != "https://htsget-lattice.example.org" {
 		t.Errorf("decoded HtsgetBaseUrl mismatch")
 	}
 	if !decoded.GeneratedAt.Equal(now) {

@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-const testAccountID = "916218008751"
+const testAccountID = "999988887777"
 
 // awsAPIError stands in for an AWS SDK error, so the tests can check it is still
 // reachable through the report.
@@ -37,7 +37,7 @@ func TestMissingPrerequisiteError_Message(t *testing.T) {
 		},
 		{
 			name:   "omits the cause fragment when there is no underlying error",
-			prereq: CopyStateMachinePrerequisite("arn:aws:states:ap-southeast-2:916218008751:stateMachine:copy", testAccountID),
+			prereq: CopyStateMachinePrerequisite("arn:aws:states:ap-southeast-2:999988887777:stateMachine:copy", testAccountID),
 			cause:  nil,
 			wantContain: []string{
 				"copy state machine",
@@ -166,7 +166,7 @@ func TestPrerequisiteReport_CollectsEveryFailure(t *testing.T) {
 	}
 	report.Record(SourceCredentialsPrerequisite("source/ceph", testAccountID),
 		&awsAPIError{msg: "ResourceNotFoundException"})
-	report.Add(ResearcherVpcPrerequisite("vpc-0123456789abcdef0", "534840902377").
+	report.Add(ResearcherVpcPrerequisite("vpc-0123456789abcdef0", "777788889999").
 		Missingf("no VPC identifier supplied"))
 
 	missing := report.Missing()
@@ -191,7 +191,7 @@ func TestPrerequisiteReport_CollectsEveryFailure(t *testing.T) {
 		"copy working bucket",
 		"source store credentials secret",
 		"researcher VPC access path",
-		"534840902377",
+		"777788889999",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("aggregate message %q does not contain %q", got, want)
@@ -237,11 +237,11 @@ func TestPrerequisiteConstructors_AttributeAnOwner(t *testing.T) {
 		{"dataset key", DatasetKeyPrerequisite("alias/dataset-a1b2c3", testAccountID), "alias/dataset-a1b2c3", testAccountID, "per-dataset"},
 		{"ledger table", LedgerTablePrerequisite("data-releaser-ShareRecords", testAccountID), "data-releaser-ShareRecords", testAccountID, "shared deployment"},
 		{"manifest bucket", ManifestBucketPrerequisite("manifests", testAccountID), "manifests", testAccountID, "shared deployment"},
-		{"copy state machine", CopyStateMachinePrerequisite("arn:aws:states:ap-southeast-2:916218008751:stateMachine:copy", testAccountID), "arn:aws:states:ap-southeast-2:916218008751:stateMachine:copy", testAccountID, "copy service"},
+		{"copy state machine", CopyStateMachinePrerequisite("arn:aws:states:ap-southeast-2:999988887777:stateMachine:copy", testAccountID), "arn:aws:states:ap-southeast-2:999988887777:stateMachine:copy", testAccountID, "copy service"},
 		{"copy working bucket", CopyWorkingBucketPrerequisite("copy-working", testAccountID), "copy-working", testAccountID, "copy service"},
 		{"source credentials", SourceCredentialsPrerequisite("source/ceph", testAccountID), "source/ceph", testAccountID, "source object store"},
 		{"source endpoint", SourceEndpointPrerequisite("https://ceph.example.org"), "https://ceph.example.org", "", "source object store"},
-		{"researcher VPC", ResearcherVpcPrerequisite("vpc-0123456789abcdef0", "534840902377"), "vpc-0123456789abcdef0", "534840902377", "researcher account"},
+		{"researcher VPC", ResearcherVpcPrerequisite("vpc-0123456789abcdef0", "777788889999"), "vpc-0123456789abcdef0", "777788889999", "researcher account"},
 	}
 
 	for _, tt := range tests {

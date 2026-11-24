@@ -46,7 +46,7 @@ func TestCreateMarksTheMechanism(t *testing.T) {
 	mock := awstest.NewDynamoDB()
 	store := NewShareStore(mock, "ShareRecords")
 
-	record := storeShare(t, store, "534840902377")
+	record := storeShare(t, store, "777788889999")
 
 	attr, ok := mock.Items[record.ShareID][model.MechanismAttribute].(*types.AttributeValueMemberS)
 	if !ok {
@@ -63,7 +63,7 @@ func TestRecordWithoutMechanismReadsAsHtsget(t *testing.T) {
 	mock := awstest.NewDynamoDB()
 	store := NewShareStore(mock, "ShareRecords")
 
-	record := storeShare(t, store, "534840902377")
+	record := storeShare(t, store, "777788889999")
 	delete(mock.Items[record.ShareID], model.MechanismAttribute)
 
 	got, err := store.Get(context.Background(), record.ShareID)
@@ -128,7 +128,7 @@ func TestReadsAreScopedToHtsgetRecords(t *testing.T) {
 			seen = params
 			return &dynamodb.QueryOutput{}, nil
 		}
-		if _, err := NewShareStore(mock, "ShareRecords").ListByAccount(context.Background(), "534840902377"); err != nil {
+		if _, err := NewShareStore(mock, "ShareRecords").ListByAccount(context.Background(), "777788889999"); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		assertScoped(t, seen.FilterExpression, seen.ExpressionAttributeNames, seen.ExpressionAttributeValues)
@@ -142,7 +142,7 @@ func TestReadsAreScopedToHtsgetRecords(t *testing.T) {
 // to feed a release to the htsget unmarshaller: it would not fail, it would report a
 // share granting nothing to nobody.
 func TestDatasetItemsNeverReachHtsgetRecords(t *testing.T) {
-	const account = "534840902377"
+	const account = "777788889999"
 
 	newStore := func(t *testing.T) (*awstest.DynamoDB, *ShareStore, string) {
 		t.Helper()

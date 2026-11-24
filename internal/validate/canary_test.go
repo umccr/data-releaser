@@ -31,7 +31,7 @@ func testLambdaLister(invoke func(ctx context.Context, params *lambda.InvokeInpu
 }
 
 // canaryAccount is the researcher account the canary's synthetic share targets.
-const canaryAccount = "534840902377"
+const canaryAccount = "777788889999"
 
 func canaryConfig() *config.CanaryConfig {
 	return &config.CanaryConfig{

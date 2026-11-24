@@ -13,7 +13,7 @@ import (
 // or none of them do. htsget-rs sends it as a header and API Gateway is free to
 // change the casing on the way through, so these cases pin the lookup.
 func TestSourceVpcArnFrom(t *testing.T) {
-	const arn = "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-0abc123"
+	const arn = "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-0abc123"
 
 	tests := []struct {
 		name string
@@ -78,7 +78,7 @@ func TestSourceVpcArnFrom(t *testing.T) {
 
 // The header name is the contract with htsget-rs: it is the `Htsget-Context-`
 // prefix plus the `name` of the forwarded context extension configured in
-// htsget-pipeline. Renaming one side without the other silently denies everyone.
+// the htsget-rs deployment. Renaming one side without the other silently denies everyone.
 func TestSourceVpcArnHeaderMatchesTheForwardedContextName(t *testing.T) {
 	if auth.SourceVpcArnHeader != "Htsget-Context-SourceVpcArn" {
 		t.Errorf("header is %q, but htsget-rs forwards the context extension named "+

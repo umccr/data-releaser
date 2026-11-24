@@ -1,0 +1,25 @@
+{
+  "dataReleaser": {
+    "account": "999988887777",
+    "region": "ap-southeast-2",
+    "namePrefix": "data-releaser",
+    "stageName": "prod",
+    "apiVpcId": "vpc-0345678901bcdef02",
+    "researcherAccountIds": ["777788889999"],
+    "cacheTtlCeiling": "1h",
+    "cacheDenyTtl": "60s",
+    "provisionOperatorPolicy": false,
+    "datasets": [
+      {
+        "name": "cohort-a",
+        "datasetUri": "s3://source-bucket/datasets/cohort-a/"
+      }
+    ],
+    "obscureBucketNames": false,
+    "copyWriterRoleName": "steps-s3-copy-role",
+    "copyStateMachineArn": "arn:aws:states:ap-southeast-2:999988887777:stateMachine:steps-s3-copy",
+    "copyWorkingBucketName": "steps-s3-copy-working-999988887777",
+    "dataShareTest": false,
+    "mockMart": false
+  }
+}

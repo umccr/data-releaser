@@ -20,8 +20,8 @@ func TestCreate_Success(t *testing.T) {
 
 	expiry := time.Now().UTC().Add(7 * 24 * time.Hour)
 	input := CreateInput{
-		ResearcherAccountID: "534840902377",
-		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123",
+		ResearcherAccountID: "777788889999",
+		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-123",
 		LibraryIDs:          []string{"L2400001", "L2400002"},
 		S3Prefixes:          []string{"s3://bucket/prefix1/", "s3://bucket/prefix2/"},
 		ExpiresAt:           &expiry,
@@ -74,8 +74,8 @@ func TestCreate_Unlimited(t *testing.T) {
 	store := NewShareStore(mock, "ShareRecords")
 
 	input := CreateInput{
-		ResearcherAccountID: "534840902377",
-		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123",
+		ResearcherAccountID: "777788889999",
+		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-123",
 		LibraryIDs:          []string{"L2400001"},
 		S3Prefixes:          []string{"s3://bucket/prefix1/"},
 		ExpiresAt:           nil, // unlimited
@@ -99,8 +99,8 @@ func TestCreate_DynamoDBError(t *testing.T) {
 	store := NewShareStore(mock, "ShareRecords")
 
 	input := CreateInput{
-		ResearcherAccountID: "534840902377",
-		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123",
+		ResearcherAccountID: "777788889999",
+		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-123",
 		LibraryIDs:          []string{"L2400001"},
 		S3Prefixes:          []string{"s3://bucket/prefix1/"},
 	}
@@ -117,8 +117,8 @@ func TestGet_Success(t *testing.T) {
 
 	// Create a record first
 	input := CreateInput{
-		ResearcherAccountID: "534840902377",
-		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123",
+		ResearcherAccountID: "777788889999",
+		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-123",
 		LibraryIDs:          []string{"L2400001"},
 		S3Prefixes:          []string{"s3://bucket/prefix1/"},
 	}
@@ -158,8 +158,8 @@ func TestRevoke_Success(t *testing.T) {
 
 	// Create an active share
 	input := CreateInput{
-		ResearcherAccountID: "534840902377",
-		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123",
+		ResearcherAccountID: "777788889999",
+		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-123",
 		LibraryIDs:          []string{"L2400001"},
 		S3Prefixes:          []string{"s3://bucket/prefix1/"},
 	}
@@ -201,8 +201,8 @@ func TestRevoke_AlreadyRevoked(t *testing.T) {
 
 	// Create and then revoke a share
 	input := CreateInput{
-		ResearcherAccountID: "534840902377",
-		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123",
+		ResearcherAccountID: "777788889999",
+		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-123",
 		LibraryIDs:          []string{"L2400001"},
 		S3Prefixes:          []string{"s3://bucket/prefix1/"},
 	}
@@ -235,8 +235,8 @@ func TestRevoke_Expired(t *testing.T) {
 
 	// Create a share with an expiry in the past
 	input := CreateInput{
-		ResearcherAccountID: "534840902377",
-		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123",
+		ResearcherAccountID: "777788889999",
+		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-123",
 		LibraryIDs:          []string{"L2400001"},
 		S3Prefixes:          []string{"s3://bucket/prefix1/"},
 		ExpiresAt:           new(time.Now().UTC().Add(-1 * time.Hour)),
@@ -259,8 +259,8 @@ func TestExtend_Success(t *testing.T) {
 
 	// Create an active share with future expiry
 	input := CreateInput{
-		ResearcherAccountID: "534840902377",
-		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123",
+		ResearcherAccountID: "777788889999",
+		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-123",
 		LibraryIDs:          []string{"L2400001"},
 		S3Prefixes:          []string{"s3://bucket/prefix1/"},
 		ExpiresAt:           new(time.Now().UTC().Add(24 * time.Hour)),
@@ -305,8 +305,8 @@ func TestExtend_AlreadyRevoked(t *testing.T) {
 
 	// Create and revoke
 	input := CreateInput{
-		ResearcherAccountID: "534840902377",
-		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123",
+		ResearcherAccountID: "777788889999",
+		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-123",
 		LibraryIDs:          []string{"L2400001"},
 		S3Prefixes:          []string{"s3://bucket/prefix1/"},
 	}
@@ -332,8 +332,8 @@ func TestExtend_Expired(t *testing.T) {
 
 	// Create with past expiry
 	input := CreateInput{
-		ResearcherAccountID: "534840902377",
-		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123",
+		ResearcherAccountID: "777788889999",
+		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-123",
 		LibraryIDs:          []string{"L2400001"},
 		S3Prefixes:          []string{"s3://bucket/prefix1/"},
 		ExpiresAt:           new(time.Now().UTC().Add(-1 * time.Hour)),
@@ -356,14 +356,14 @@ func TestListByAccount_Success(t *testing.T) {
 
 	// Create two shares for the same account
 	input1 := CreateInput{
-		ResearcherAccountID: "534840902377",
-		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123",
+		ResearcherAccountID: "777788889999",
+		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-123",
 		LibraryIDs:          []string{"L2400001"},
 		S3Prefixes:          []string{"s3://bucket/prefix1/"},
 	}
 	input2 := CreateInput{
-		ResearcherAccountID: "534840902377",
-		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123",
+		ResearcherAccountID: "777788889999",
+		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-123",
 		LibraryIDs:          []string{"L2400002"},
 		S3Prefixes:          []string{"s3://bucket/prefix2/"},
 	}
@@ -377,7 +377,7 @@ func TestListByAccount_Success(t *testing.T) {
 		t.Fatalf("unexpected error creating second: %v", err)
 	}
 
-	records, err := store.ListByAccount(context.Background(), "534840902377")
+	records, err := store.ListByAccount(context.Background(), "777788889999")
 	if err != nil {
 		t.Fatalf("unexpected error listing: %v", err)
 	}
@@ -467,8 +467,8 @@ func TestMarshalUnmarshal_RoundTrip(t *testing.T) {
 
 	original := &model.ShareRecord{
 		ShareID:             "01HYPE7XXXXXXXXXXXXXXXXXXX",
-		ResearcherAccountID: "534840902377",
-		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123",
+		ResearcherAccountID: "777788889999",
+		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-123",
 		LibraryIDs:          []string{"L2400001", "L2400002"},
 		S3Prefixes:          []string{"s3://bucket/prefix1/", "s3://bucket/prefix2/"},
 		CreatedAt:           now,
@@ -510,8 +510,8 @@ func TestMarshalUnmarshal_RoundTrip_WithRevokedAt(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	original := &model.ShareRecord{
 		ShareID:             "01HYPE7XXXXXXXXXXXXXXXXXXX",
-		ResearcherAccountID: "534840902377",
-		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123",
+		ResearcherAccountID: "777788889999",
+		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-123",
 		LibraryIDs:          []string{"L2400001"},
 		S3Prefixes:          []string{"s3://bucket/prefix1/"},
 		CreatedAt:           now.Add(-time.Hour),
@@ -542,8 +542,8 @@ func TestRevoke_AlreadyRevoked_StateUnchanged(t *testing.T) {
 
 	// Create and revoke a share
 	input := CreateInput{
-		ResearcherAccountID: "534840902377",
-		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123",
+		ResearcherAccountID: "777788889999",
+		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-123",
 		LibraryIDs:          []string{"L2400001"},
 		S3Prefixes:          []string{"s3://bucket/prefix1/"},
 	}
@@ -581,8 +581,8 @@ func TestRevoke_Expired_StateUnchanged(t *testing.T) {
 
 	// Create a share with past expiry
 	input := CreateInput{
-		ResearcherAccountID: "534840902377",
-		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123",
+		ResearcherAccountID: "777788889999",
+		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-123",
 		LibraryIDs:          []string{"L2400001"},
 		S3Prefixes:          []string{"s3://bucket/prefix1/"},
 		ExpiresAt:           new(time.Now().UTC().Add(-1 * time.Hour)),
@@ -617,8 +617,8 @@ func TestExtend_Revoked_StateUnchanged(t *testing.T) {
 
 	// Create and simulate revoked state
 	input := CreateInput{
-		ResearcherAccountID: "534840902377",
-		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123",
+		ResearcherAccountID: "777788889999",
+		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-123",
 		LibraryIDs:          []string{"L2400001"},
 		S3Prefixes:          []string{"s3://bucket/prefix1/"},
 	}
@@ -655,8 +655,8 @@ func TestExtend_Expired_StateUnchanged(t *testing.T) {
 
 	// Create with past expiry
 	input := CreateInput{
-		ResearcherAccountID: "534840902377",
-		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123",
+		ResearcherAccountID: "777788889999",
+		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-123",
 		LibraryIDs:          []string{"L2400001"},
 		S3Prefixes:          []string{"s3://bucket/prefix1/"},
 		ExpiresAt:           new(time.Now().UTC().Add(-1 * time.Hour)),
@@ -706,8 +706,8 @@ func TestFindMatchingActiveShare_ExactMatch(t *testing.T) {
 
 	// Create an active share
 	input := CreateInput{
-		ResearcherAccountID: "534840902377",
-		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123",
+		ResearcherAccountID: "777788889999",
+		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-123",
 		LibraryIDs:          []string{"L2400001", "L2400002"},
 		S3Prefixes:          []string{"s3://bucket/prefix1/", "s3://bucket/prefix2/"},
 	}
@@ -718,7 +718,7 @@ func TestFindMatchingActiveShare_ExactMatch(t *testing.T) {
 	}
 
 	// Search with same library IDs in different order
-	match, err := store.FindMatchingActiveShare(context.Background(), "534840902377", []string{"L2400002", "L2400001"})
+	match, err := store.FindMatchingActiveShare(context.Background(), "777788889999", []string{"L2400002", "L2400001"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -737,8 +737,8 @@ func TestFindMatchingActiveShare_NoMatch_DifferentLibraries(t *testing.T) {
 
 	// Create an active share
 	input := CreateInput{
-		ResearcherAccountID: "534840902377",
-		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123",
+		ResearcherAccountID: "777788889999",
+		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-123",
 		LibraryIDs:          []string{"L2400001", "L2400002"},
 		S3Prefixes:          []string{"s3://bucket/prefix1/", "s3://bucket/prefix2/"},
 	}
@@ -749,7 +749,7 @@ func TestFindMatchingActiveShare_NoMatch_DifferentLibraries(t *testing.T) {
 	}
 
 	// Search with partially overlapping (but not exact) library IDs
-	match, err := store.FindMatchingActiveShare(context.Background(), "534840902377", []string{"L2400001", "L2400003"})
+	match, err := store.FindMatchingActiveShare(context.Background(), "777788889999", []string{"L2400001", "L2400003"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -765,8 +765,8 @@ func TestFindMatchingActiveShare_SkipsRevoked(t *testing.T) {
 
 	// Create a share and then revoke it
 	input := CreateInput{
-		ResearcherAccountID: "534840902377",
-		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123",
+		ResearcherAccountID: "777788889999",
+		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-123",
 		LibraryIDs:          []string{"L2400001"},
 		S3Prefixes:          []string{"s3://bucket/prefix1/"},
 	}
@@ -781,7 +781,7 @@ func TestFindMatchingActiveShare_SkipsRevoked(t *testing.T) {
 	mock.Items[created.ShareID]["revokedAt"] = &types.AttributeValueMemberS{Value: revokedAt}
 
 	// Search should not find the revoked share
-	match, err := store.FindMatchingActiveShare(context.Background(), "534840902377", []string{"L2400001"})
+	match, err := store.FindMatchingActiveShare(context.Background(), "777788889999", []string{"L2400001"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -798,8 +798,8 @@ func TestFindMatchingActiveShare_SkipsExpired(t *testing.T) {
 	// Create a share with past expiry
 	pastExpiry := time.Now().UTC().Add(-1 * time.Hour)
 	input := CreateInput{
-		ResearcherAccountID: "534840902377",
-		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123",
+		ResearcherAccountID: "777788889999",
+		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-123",
 		LibraryIDs:          []string{"L2400001"},
 		S3Prefixes:          []string{"s3://bucket/prefix1/"},
 		ExpiresAt:           &pastExpiry,
@@ -811,7 +811,7 @@ func TestFindMatchingActiveShare_SkipsExpired(t *testing.T) {
 	}
 
 	// Search should not find the expired share
-	match, err := store.FindMatchingActiveShare(context.Background(), "534840902377", []string{"L2400001"})
+	match, err := store.FindMatchingActiveShare(context.Background(), "777788889999", []string{"L2400001"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -825,7 +825,7 @@ func TestFindMatchingActiveShare_NoShares(t *testing.T) {
 	mock := awstest.NewDynamoDB()
 	store := NewShareStore(mock, "ShareRecords")
 
-	match, err := store.FindMatchingActiveShare(context.Background(), "534840902377", []string{"L2400001"})
+	match, err := store.FindMatchingActiveShare(context.Background(), "777788889999", []string{"L2400001"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -840,8 +840,8 @@ func TestCreateIdempotent_NewShare(t *testing.T) {
 	store := NewShareStore(mock, "ShareRecords")
 
 	input := CreateInput{
-		ResearcherAccountID: "534840902377",
-		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123",
+		ResearcherAccountID: "777788889999",
+		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-123",
 		LibraryIDs:          []string{"L2400001", "L2400002"},
 		S3Prefixes:          []string{"s3://bucket/prefix1/", "s3://bucket/prefix2/"},
 	}
@@ -867,8 +867,8 @@ func TestCreateIdempotent_ExistingMatch(t *testing.T) {
 	store := NewShareStore(mock, "ShareRecords")
 
 	input := CreateInput{
-		ResearcherAccountID: "534840902377",
-		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123",
+		ResearcherAccountID: "777788889999",
+		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-123",
 		LibraryIDs:          []string{"L2400001", "L2400002"},
 		S3Prefixes:          []string{"s3://bucket/prefix1/", "s3://bucket/prefix2/"},
 	}
@@ -881,8 +881,8 @@ func TestCreateIdempotent_ExistingMatch(t *testing.T) {
 
 	// Idempotent creation with same libraries (different order)
 	input2 := CreateInput{
-		ResearcherAccountID: "534840902377",
-		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123",
+		ResearcherAccountID: "777788889999",
+		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-123",
 		LibraryIDs:          []string{"L2400002", "L2400001"}, // different order
 		S3Prefixes:          []string{"s3://bucket/prefix2/", "s3://bucket/prefix1/"},
 	}
@@ -906,8 +906,8 @@ func TestCreateIdempotent_PartialOverlap_CreatesNew(t *testing.T) {
 
 	// Create a share with L1, L2
 	input := CreateInput{
-		ResearcherAccountID: "534840902377",
-		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123",
+		ResearcherAccountID: "777788889999",
+		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-123",
 		LibraryIDs:          []string{"L2400001", "L2400002"},
 		S3Prefixes:          []string{"s3://bucket/prefix1/", "s3://bucket/prefix2/"},
 	}
@@ -919,8 +919,8 @@ func TestCreateIdempotent_PartialOverlap_CreatesNew(t *testing.T) {
 
 	// Idempotent creation with partial overlap (L1, L3) — should create new share
 	input2 := CreateInput{
-		ResearcherAccountID: "534840902377",
-		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123",
+		ResearcherAccountID: "777788889999",
+		TargetVpcArn:        "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-123",
 		LibraryIDs:          []string{"L2400001", "L2400003"},
 		S3Prefixes:          []string{"s3://bucket/prefix1/", "s3://bucket/prefix3/"},
 	}

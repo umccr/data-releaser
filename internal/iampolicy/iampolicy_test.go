@@ -51,7 +51,7 @@ func TestResourceMatchers(t *testing.T) {
 		{element: `"arn:aws:s3:::hot-cache-cohort-abridged/*"`},
 		{element: `"arn:aws:s3:::hot-cache-cohort-abridged"`},
 		// Not an S3 resource at all, so it says nothing about this bucket.
-		{element: `"arn:aws:kms:ap-southeast-2:916218008751:key/hot-cache-cohort-a"`},
+		{element: `"arn:aws:kms:ap-southeast-2:999988887777:key/hot-cache-cohort-a"`},
 		{element: `"hot-cache-cohort-a/*"`},
 	}
 

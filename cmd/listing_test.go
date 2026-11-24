@@ -26,7 +26,7 @@ import (
 
 // listingResearcher is the account that holds records of both kinds, which is the case the
 // listing exists for: one researcher, two mechanisms, one answer.
-const listingResearcher = "534840902377"
+const listingResearcher = "777788889999"
 
 // listingLedger is one table holding every kind of record a listing has to report, in
 // every state it has to report them in.
@@ -302,7 +302,7 @@ func TestCopyRowsDistinguishNoExpiryFromNoAccess(t *testing.T) {
 // operator notice.
 func TestTargetVpcColumnIsComparableAcrossMechanisms(t *testing.T) {
 	cases := map[string]string{
-		"arn:aws:ec2:ap-southeast-2:534840902377:vpc/" + releaseVpc: releaseVpc,
+		"arn:aws:ec2:ap-southeast-2:777788889999:vpc/" + releaseVpc: releaseVpc,
 		releaseVpc:             releaseVpc,
 		"":                     absentValue,
 		"vpc-lattice-nonsense": "vpc-lattice-nonsense",

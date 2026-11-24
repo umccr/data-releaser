@@ -31,7 +31,7 @@ func (m *stubSTSClient) GetCallerIdentity(ctx context.Context, params *sts.GetCa
 	if m.fn != nil {
 		return m.fn(ctx, params)
 	}
-	acct := "534840902377"
+	acct := "777788889999"
 	return &sts.GetCallerIdentityOutput{Account: &acct}, nil
 }
 

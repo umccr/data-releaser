@@ -33,9 +33,9 @@ import (
 // the ARN merely happens to contain the same identifier.
 const (
 	completionCopyID        = "01JSTAGERUN000000000000AAA"
-	completionExecutionArn  = "arn:aws:states:ap-southeast-2:916218008751:execution:copy:" + completionCopyID
-	completionEarlierArn    = "arn:aws:states:ap-southeast-2:916218008751:execution:copy:earlier-attempt"
-	completionStateMachine  = "arn:aws:states:ap-southeast-2:916218008751:stateMachine:copy"
+	completionExecutionArn  = "arn:aws:states:ap-southeast-2:999988887777:execution:copy:" + completionCopyID
+	completionEarlierArn    = "arn:aws:states:ap-southeast-2:999988887777:execution:copy:earlier-attempt"
+	completionStateMachine  = "arn:aws:states:ap-southeast-2:999988887777:stateMachine:copy"
 	completionDatasetURI    = "s3://ceph-source/datasets/cohort-a/"
 	completionCacheBucket   = "hot-cache-cohort-a"
 	completionCacheKey      = ControlPrefix + "/summary.csv"
@@ -143,7 +143,7 @@ func completionLedgerIn(state CopyState) *completionLedger {
 			CopyID:           completionCopyID,
 			DatasetURI:       completionDatasetURI,
 			HotCacheBucket:   completionCacheBucket,
-			KeyArn:           "arn:aws:kms:ap-southeast-2:916218008751:key/1111aaaa-2222-bbbb-3333-cccc4444dddd",
+			KeyArn:           "arn:aws:kms:ap-southeast-2:999988887777:key/1111aaaa-2222-bbbb-3333-cccc4444dddd",
 			State:            state,
 			CopyExecutionArn: completionExecutionArn,
 		},
@@ -399,7 +399,7 @@ func TestHandleReportsAnExecutionNoCopyIsRecordedUnder(t *testing.T) {
 
 	event := completionEvent(t, ExecutionSucceeded)
 	event.Name = "estimate-cohort-a-20260506"
-	event.ExecutionArn = "arn:aws:states:ap-southeast-2:916218008751:execution:copy:" + event.Name
+	event.ExecutionArn = "arn:aws:states:ap-southeast-2:999988887777:execution:copy:" + event.Name
 
 	handler := NewCopyCompletionHandler(ledger, newCompletionCopies("", nil), objects)
 	completion, err := handler.Handle(context.Background(), event)

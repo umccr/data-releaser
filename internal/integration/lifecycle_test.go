@@ -41,8 +41,8 @@ const (
 	minioUser = "minioadmin"
 	minioPass = "minioadmin"
 
-	researcherAccountID = "534840902377"
-	targetVpcArn        = "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-0abc123"
+	researcherAccountID = "777788889999"
+	targetVpcArn        = "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-0abc123"
 	htsgetBaseURL       = "https://htsget.example.org"
 )
 
@@ -99,7 +99,7 @@ func TestShareRevokeManifestLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("rendering manifest key: %v", err)
 	}
-	if manifestKey != "manifests/534840902377/manifest.json" {
+	if manifestKey != "manifests/777788889999/manifest.json" {
 		t.Fatalf("unexpected manifest key: %q", manifestKey)
 	}
 

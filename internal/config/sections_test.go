@@ -38,20 +38,20 @@ var (
 // manifest key are all left to their defaults, so this also covers those defaults being
 // enough to satisfy a check.
 const directReadOnlyConfig = `
-account: "916218008751"
+account: "999988887777"
 region: "ap-southeast-2"
 manifest:
   bucket: "data-control-manifests"
 s3:
   copy:
-    stateMachineArn: "arn:aws:states:ap-southeast-2:916218008751:stateMachine:steps-s3-copy"
+    stateMachineArn: "arn:aws:states:ap-southeast-2:999988887777:stateMachine:steps-s3-copy"
     workingBucket: "steps-s3-copy-working"
     writerRoleName: "steps-s3-copy-writer"
   source:
     endpointUrl: "https://ceph.example.org"
     region: "us-east-1"
     credentialsSecret: "source-store/credentials"
-  custodianRoleArn: "arn:aws:iam::916218008751:role/DatasetCustodian"
+  custodianRoleArn: "arn:aws:iam::999988887777:role/DatasetCustodian"
 `
 
 // htsgetOnlyConfig carries everything the htsget mechanism needs and nothing the
@@ -67,8 +67,8 @@ endpoints:
   authorization: "https://auth.example.com"
   htsgetBaseUrl: "https://htsget.example.com"
 researchers:
-  "534840902377":
-    targetVpcArn: "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-0123456789abcdef0"
+  "777788889999":
+    targetVpcArn: "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-0123456789abcdef0"
 `
 
 // TestRequire_DirectReadConfigNeedsNoHtsgetFields is the case that motivated splitting
@@ -132,7 +132,7 @@ func TestRequire_ImpliedSectionsAreChecked(t *testing.T) {
 	cfg := loadConfigContent(t, `
 s3:
   copy:
-    stateMachineArn: "arn:aws:states:ap-southeast-2:916218008751:stateMachine:steps-s3-copy"
+    stateMachineArn: "arn:aws:states:ap-southeast-2:999988887777:stateMachine:steps-s3-copy"
     workingBucket: "steps-s3-copy-working"
 `)
 
@@ -213,7 +213,7 @@ func TestRequire_ResearcherVpcMustBeTheFormTheCalloutSees(t *testing.T) {
 		arn  string
 	}{
 		{"bare vpc identifier", "vpc-0123456789abcdef0"},
-		{"vpc-lattice association", "arn:aws:vpc-lattice:ap-southeast-2:534840902377:servicenetworkserviceassociation/*"},
+		{"vpc-lattice association", "arn:aws:vpc-lattice:ap-southeast-2:777788889999:servicenetworkserviceassociation/*"},
 		{"another account's vpc", "arn:aws:ec2:ap-southeast-2:111111111111:vpc/vpc-0123456789abcdef0"},
 		{"empty", ""},
 	}
@@ -221,11 +221,11 @@ func TestRequire_ResearcherVpcMustBeTheFormTheCalloutSees(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			cfg := loadConfigContent(t, `
 researchers:
-  "534840902377":
+  "777788889999":
     targetVpcArn: "`+c.arn+`"
 `)
 			err := cfg.Require(SectionResearchers)
-			requireErrorNames(t, err, "researchers.534840902377.targetVpcArn")
+			requireErrorNames(t, err, "researchers.777788889999.targetVpcArn")
 		})
 	}
 }
@@ -234,7 +234,7 @@ researchers:
 // bucket holds one key, so purging either dataset would destroy both.
 func TestRequire_HotCacheBucketCollision(t *testing.T) {
 	cfg := loadConfigContent(t, `
-account: "916218008751"
+account: "999988887777"
 region: "ap-southeast-2"
 s3:
   hotCache:
@@ -287,7 +287,7 @@ func TestResolveBucketNameHashKey(t *testing.T) {
 	t.Run("reported by the section check", func(t *testing.T) {
 		t.Setenv(BucketNameHashKeyEnv, "")
 		cfg := loadConfigContent(t, `
-account: "916218008751"
+account: "999988887777"
 region: "ap-southeast-2"
 s3:
   hotCache:

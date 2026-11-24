@@ -47,7 +47,7 @@ import (
 // compares a request against, and the execution names the state machine configured below,
 // which is what makes it evidence that the orchestration answers for it.
 const (
-	datasetOwnerAccount      = "916218008751"
+	datasetOwnerAccount      = "999988887777"
 	datasetResearcherAccount = "123456789012"
 	datasetSecondResearcher  = "210987654321"
 	datasetStrangerAccount   = "999999999999"
@@ -57,13 +57,13 @@ const (
 	datasetSecondResearchvpc = "vpc-0b2c3d4e5f60718a9"
 	datasetStrangerTargetVpc = "vpc-0999888777666555"
 
-	datasetCopyStateMachine = "arn:aws:states:ap-southeast-2:916218008751:stateMachine:dataset-copy"
-	datasetCopyExecution    = "arn:aws:states:ap-southeast-2:916218008751:execution:dataset-copy:01J8ZQ4N8Z4T7VQ2K3M5X6Y7A0"
+	datasetCopyStateMachine = "arn:aws:states:ap-southeast-2:999988887777:stateMachine:dataset-copy"
+	datasetCopyExecution    = "arn:aws:states:ap-southeast-2:999988887777:execution:dataset-copy:01J8ZQ4N8Z4T7VQ2K3M5X6Y7A0"
 	datasetWorkingBucket    = "copy-service-working"
 	datasetWorkingPrefix    = "instructions"
 
 	datasetSourceEndpoint = "https://ceph.example.org"
-	datasetSourceSecret   = "arn:aws:secretsmanager:ap-southeast-2:916218008751:secret:ceph-source-Ab12Cd" // pragma: allowlist secret
+	datasetSourceSecret   = "arn:aws:secretsmanager:ap-southeast-2:999988887777:secret:ceph-source-Ab12Cd" // pragma: allowlist secret
 )
 
 // datasetNow pins the clock the pass judges expiry and scheduled key deletion against, so
@@ -96,7 +96,7 @@ func cohortACopy() *dataset.Copy {
 		CopyID:           "01J8ZQ4N8Z4T7VQ2K3M5X6Y7A0",
 		DatasetURI:       "s3://ceph-source/datasets/cohort-a/",
 		HotCacheBucket:   "hot-cache-cohort-a",
-		KeyArn:           "arn:aws:kms:ap-southeast-2:916218008751:key/1a2b3c4d-5e6f-7081-92a3-b4c5d6e7f809",
+		KeyArn:           "arn:aws:kms:ap-southeast-2:999988887777:key/1a2b3c4d-5e6f-7081-92a3-b4c5d6e7f809",
 		State:            dataset.CopyStateStaged,
 		CreatedAt:        time.Date(2026, 7, 10, 4, 0, 0, 0, time.UTC),
 		ObjectCount:      12,
@@ -113,7 +113,7 @@ func cohortBCopy() *dataset.Copy {
 		CopyID:         "01J8ZQ4N8Z4T7VQ2K3M5X6Y7B1",
 		DatasetURI:     "s3://ceph-source/datasets/cohort-b/",
 		HotCacheBucket: "hot-cache-cohort-b",
-		KeyArn:         "arn:aws:kms:ap-southeast-2:916218008751:key/2b3c4d5e-6f70-8192-a3b4-c5d6e7f80912",
+		KeyArn:         "arn:aws:kms:ap-southeast-2:999988887777:key/2b3c4d5e-6f70-8192-a3b4-c5d6e7f80912",
 		State:          dataset.CopyStateStaged,
 		CreatedAt:      time.Date(2026, 7, 11, 4, 0, 0, 0, time.UTC),
 		ObjectCount:    9,
@@ -130,7 +130,7 @@ func failedCohortACopy() *dataset.Copy {
 	c.State = dataset.CopyStateFailed
 	c.CreatedAt = c.CreatedAt.Add(-24 * time.Hour)
 	c.ObjectCount, c.TotalBytes = 3, 4096
-	c.CopyExecutionArn = "arn:aws:states:ap-southeast-2:916218008751:execution:dataset-copy:01J8ZQ4N8Z4T7VQ2K3M5X6Y7C1"
+	c.CopyExecutionArn = "arn:aws:states:ap-southeast-2:999988887777:execution:dataset-copy:01J8ZQ4N8Z4T7VQ2K3M5X6Y7C1"
 	return c
 }
 
@@ -154,7 +154,7 @@ func datasetSettings() dataset.PolicySettings {
 		AccountID:          datasetOwnerAccount,
 		Region:             datasetRegion,
 		CopyWriterRoleName: "copy-writer",
-		CustodianRoleARN:   "arn:aws:iam::916218008751:role/dataset-custodian",
+		CustodianRoleARN:   "arn:aws:iam::999988887777:role/dataset-custodian",
 	}
 }
 

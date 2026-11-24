@@ -241,21 +241,21 @@ func TestDiffLooksPastHowADocumentIsWritten(t *testing.T) {
         {
           "Sid": "AllowCopyWriterToEncrypt",
           "Effect": "Allow",
-          "Principal": {"AWS": "arn:aws:iam::916218008751:role/copy-writer"},
+          "Principal": {"AWS": "arn:aws:iam::999988887777:role/copy-writer"},
           "Action": ["kms:GenerateDataKey", "kms:Decrypt"],
           "Resource": "*"
         },
         {
           "Sid": "AllowCustodianToWithdraw",
           "Effect": "Allow",
-          "Principal": {"AWS": "arn:aws:iam::916218008751:role/dataset-custodian"},
+          "Principal": {"AWS": "arn:aws:iam::999988887777:role/dataset-custodian"},
           "Action": ["kms:DisableKey", "kms:ScheduleKeyDeletion"],
           "Resource": "*"
         },
         {
           "Sid": "AllowAccountKeyAdministration",
           "Effect": "Allow",
-          "Principal": "916218008751",
+          "Principal": "999988887777",
           "Action": "kms:*",
           "Resource": "*"
         }

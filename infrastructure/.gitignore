@@ -15,3 +15,7 @@ dist/
 # test-data/ is deliberately NOT ignored: the htsget-rs sample fixtures are
 # vendored so DataShareTestStack synthesises straight from a fresh clone. See
 # test-data/README.md for provenance.
+
+# Deployment configuration and the VPC lookups CDK caches. Keep it outside this
+# repository; see cdk.context.example.json.
+cdk.context.json

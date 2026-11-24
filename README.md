@@ -1,9 +1,9 @@
 # Data Releaser
 
-Data Releaser is a Go CLI tool that lets UMCCR administrators grant external
-researchers time-bounded (or unlimited) access to bioinformatics data held by
-UMCCR, through one of **two release mechanisms that share these verbs and nothing
-else**.
+Data Releaser is a Go CLI tool that lets administrators grant researchers
+time-bounded (or unlimited) access to bioinformatics data held by their
+organisation, through one of **two release mechanisms that share these verbs and
+nothing else**.
 
 - **`htsget`** — the researcher streams range requests for named libraries
   through [htsget-rs](https://github.com/umccr/htsget-rs) over a private VPC
@@ -74,14 +74,14 @@ This repository holds three deliverables in one place:
 The workflow spans several AWS accounts. Boundaries are accounts; edges are the
 trust and data flows between components.
 
-| Account | ID | Role |
-| --- | --- | --- |
-| Data Control | `916218008751` | Hosts htsget-rs, the authorization service, the ledger table, VPC Lattice, the manifest bucket, and each dataset's cache bucket and key. Owner of **every** record either mechanism writes. The account the CLI authenticates into. |
-| Data | `503977275616` | Holds the actual bioinformatics S3 files that htsget-rs serves. |
-| Warehouse | `115253169271` | Hosts OrcaVault/OrcaHouse and shares the `mart` layer to Data Control via Lake Formation. |
-| Production | `472057503814` | Hosts the upstream OrcaBus services. Not accessed by the tool for resolution. |
-| Researcher | e.g. `534840902377` | External account that consumes shared data — through htsget-rs over VPC Lattice, or by reading a copied dataset directly out of its cache bucket from one nominated VPC. |
-| Source store | — | The external S3-compatible store the s3 mechanism copies datasets out of. Reached through a custom endpoint with credentials the copy orchestration resolves for itself; they never pass through the CLI. |
+| Account | Role |
+| --- | --- |
+| Data Control | Hosts htsget-rs, the authorization service, the ledger table, VPC Lattice, the manifest bucket, and each dataset's cache bucket and key. Owner of **every** record either mechanism writes. The account the CLI authenticates into. |
+| Data | Holds the actual bioinformatics S3 files that htsget-rs serves. |
+| Warehouse | Hosts OrcaVault/OrcaHouse and shares the `mart` layer to Data Control via Lake Formation. |
+| Production | Hosts the upstream OrcaBus services. Not accessed by the tool for resolution. |
+| Researcher | Account that consumes shared data — through htsget-rs over VPC Lattice, or by reading a copied dataset directly out of its cache bucket from one nominated VPC. |
+| Source store | The external S3-compatible store the s3 mechanism copies datasets out of. Reached through a custom endpoint with credentials the copy orchestration resolves for itself; they never pass through the CLI. |
 
 The two mechanisms are drawn separately, because they meet only at the CLI, the
 ledger table and the manifest bucket.
@@ -127,8 +127,8 @@ Each `.drawio.svg` embeds its own source: open it in [draw.io](https://www.drawi
   directly. Because the Mart is a daily-batch warehouse, resolution reflects the
   most recent build and may lag live OrcaBus state by up to roughly a day.
 
-For the authorization data flow, caching semantics, and correctness properties,
-see the design document at `.kiro/specs/data-releaser/design.md`.
+For caching semantics and the other behaviour an administrator has to plan
+around, see [`docs/operations.md`](docs/operations.md).
 
 ## Quick start
 
@@ -136,8 +136,9 @@ see the design document at `.kiro/specs/data-releaser/design.md`.
 # Build the CLI
 go build -o data-releaser .
 
-# Provide a config file (see docs/configuration.md for every field).
-# It is searched for at ./config.yaml, then ~/.config/data-releaser/config.yaml.
+# Provide a config file: copy config.example.yaml to config.yaml and fill it in
+# (see docs/configuration.md for every field). It is searched for at
+# ./config.yaml, then ~/.config/data-releaser/config.yaml.
 
 # Confirm the infrastructure is healthy before sharing. Bare, this checks both
 # mechanisms; name one to narrow it to that mechanism's checks.
@@ -145,14 +146,14 @@ go build -o data-releaser .
 
 # htsget: share two libraries with a researcher account for 30 days
 ./data-releaser share htsget --libraries L2400001,L2400002 \
-  --account 534840902377 --expiry 30d
+  --account 777788889999 --expiry 30d
 
 # s3: copy a dataset in, then grant one researcher read access from one VPC.
 # Staging returns as soon as the copy has been started; nothing can be granted
 # until it reports and the copy moves to staged.
 ./data-releaser stage s3 --dataset-uri s3://source-bucket/datasets/cohort-a/
 ./data-releaser share s3 --dataset-uri s3://source-bucket/datasets/cohort-a/ \
-  --account 534840902377 --target-vpc-id vpc-0123456789abcdef0 --expiry 30d
+  --account 777788889999 --target-vpc-id vpc-0123456789abcdef0 --expiry 30d
 
 # See both mechanisms' records, whatever state they are in
 ./data-releaser list
@@ -176,4 +177,7 @@ exits non-zero and names the forms that exist rather than guessing.
 | [`docs/onboarding.md`](docs/onboarding.md) | The end-to-end procedure for onboarding a researcher account across the data plane (RAM/VPC Lattice) and manifest plane, ending in a `validate` check |
 | [`docs/operations.md`](docs/operations.md) | Operational characteristics an administrator must understand: cache-bounded htsget revocation, immutable library sets, idempotent creation, ~1-day warehouse lag, and the drift the s3 mechanism can develop |
 | [`docs/manifest.md`](docs/manifest.md) | The researcher manifests' JSON schemas and locations, and why they are descriptive only and never consulted for authorization |
-| [`DEMO.md`](DEMO.md) | Step-by-step verification of the whole system against live AWS, from `cdk deploy` through a real htsget read, including the negative tests that prove authorization works |
+
+## License
+
+MIT. See [`LICENSE`](LICENSE).

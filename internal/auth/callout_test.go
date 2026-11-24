@@ -191,7 +191,7 @@ func TestHandleCalloutWithHeaders_DenyOnNoShares(t *testing.T) {
 	}
 
 	result, err := handler.HandleCalloutWithHeaders(context.Background(),
-		"arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123",
+		"arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-123",
 		1*time.Hour, 60*time.Second)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -215,7 +215,7 @@ func TestHandleCalloutWithHeaders_DenyOnDynamoDBError(t *testing.T) {
 	}
 
 	result, err := handler.HandleCalloutWithHeaders(context.Background(),
-		"arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123",
+		"arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-123",
 		1*time.Hour, 60*time.Second)
 	if err == nil {
 		t.Fatal("expected error, got nil")
@@ -242,13 +242,13 @@ func TestHandleCalloutWithHeaders_AllowWithCacheControl(t *testing.T) {
 	expiryStr := expiry.Format(time.RFC3339)
 	createdAtStr := now.Add(-1 * time.Hour).Format(time.RFC3339)
 
-	vpcArn := "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123"
+	vpcArn := "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-123"
 
 	// Override queryFn to return a matching share
 	mock.QueryFn = func(ctx context.Context, params *dynamodb.QueryInput) (*dynamodb.QueryOutput, error) {
 		item := map[string]types.AttributeValue{
 			"shareId":             &types.AttributeValueMemberS{Value: "01TEST123456789012345678"},
-			"researcherAccountId": &types.AttributeValueMemberS{Value: "534840902377"},
+			"researcherAccountId": &types.AttributeValueMemberS{Value: "777788889999"},
 			"targetVpcArn":        &types.AttributeValueMemberS{Value: vpcArn},
 			"libraryIds":          &types.AttributeValueMemberSS{Value: []string{"L2400001"}},
 			"s3Prefixes":          &types.AttributeValueMemberSS{Value: []string{"s3://bucket/prefix1/"}},
@@ -291,13 +291,13 @@ func TestHandleCalloutWithHeaders_AllowUnlimitedShare(t *testing.T) {
 	now := time.Now().UTC()
 	createdAtStr := now.Add(-1 * time.Hour).Format(time.RFC3339)
 
-	vpcArn := "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123"
+	vpcArn := "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-123"
 
 	// Override queryFn to return an unlimited share (no expiresAt)
 	mock.QueryFn = func(ctx context.Context, params *dynamodb.QueryInput) (*dynamodb.QueryOutput, error) {
 		item := map[string]types.AttributeValue{
 			"shareId":             &types.AttributeValueMemberS{Value: "01TEST123456789012345678"},
-			"researcherAccountId": &types.AttributeValueMemberS{Value: "534840902377"},
+			"researcherAccountId": &types.AttributeValueMemberS{Value: "777788889999"},
 			"targetVpcArn":        &types.AttributeValueMemberS{Value: vpcArn},
 			"libraryIds":          &types.AttributeValueMemberSS{Value: []string{"L2400001"}},
 			"s3Prefixes":          &types.AttributeValueMemberSS{Value: []string{"s3://bucket/prefix1/"}},
@@ -335,13 +335,13 @@ func TestHandleCalloutWithHeaders_SkipsExpiredShares(t *testing.T) {
 	pastExpiryStr := pastExpiry.Format(time.RFC3339)
 	createdAtStr := now.Add(-2 * time.Hour).Format(time.RFC3339)
 
-	vpcArn := "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123"
+	vpcArn := "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-123"
 
 	// Override queryFn to return an expired share
 	mock.QueryFn = func(ctx context.Context, params *dynamodb.QueryInput) (*dynamodb.QueryOutput, error) {
 		item := map[string]types.AttributeValue{
 			"shareId":             &types.AttributeValueMemberS{Value: "01TEST123456789012345678"},
-			"researcherAccountId": &types.AttributeValueMemberS{Value: "534840902377"},
+			"researcherAccountId": &types.AttributeValueMemberS{Value: "777788889999"},
 			"targetVpcArn":        &types.AttributeValueMemberS{Value: vpcArn},
 			"libraryIds":          &types.AttributeValueMemberSS{Value: []string{"L2400001"}},
 			"s3Prefixes":          &types.AttributeValueMemberSS{Value: []string{"s3://bucket/prefix1/"}},
@@ -377,13 +377,13 @@ func TestHandleCalloutWithHeaders_SkipsRevokedShares(t *testing.T) {
 	revokedAtStr := revokedAt.Format(time.RFC3339)
 	createdAtStr := now.Add(-2 * time.Hour).Format(time.RFC3339)
 
-	vpcArn := "arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123"
+	vpcArn := "arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-123"
 
 	// Override queryFn to return a revoked share
 	mock.QueryFn = func(ctx context.Context, params *dynamodb.QueryInput) (*dynamodb.QueryOutput, error) {
 		item := map[string]types.AttributeValue{
 			"shareId":             &types.AttributeValueMemberS{Value: "01TEST123456789012345678"},
-			"researcherAccountId": &types.AttributeValueMemberS{Value: "534840902377"},
+			"researcherAccountId": &types.AttributeValueMemberS{Value: "777788889999"},
 			"targetVpcArn":        &types.AttributeValueMemberS{Value: vpcArn},
 			"libraryIds":          &types.AttributeValueMemberSS{Value: []string{"L2400001"}},
 			"s3Prefixes":          &types.AttributeValueMemberSS{Value: []string{"s3://bucket/prefix1/"}},
@@ -423,7 +423,7 @@ func TestHandleCallout_BackwardCompatible(t *testing.T) {
 
 	// The original HandleCallout should still work
 	response, err := handler.HandleCallout(context.Background(),
-		"arn:aws:ec2:ap-southeast-2:534840902377:vpc/vpc-123")
+		"arn:aws:ec2:ap-southeast-2:777788889999:vpc/vpc-123")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
