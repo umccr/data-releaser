@@ -4,18 +4,19 @@ cdk.out/
 # Node
 node_modules/
 
-# TypeScript build artifacts (compiled alongside sources)
-*.js
-*.d.ts
-!jest.config.js
+# Compiled Lambda binaries (bun run build:lambdas)
+assets/
 
-# Stale Go Lambda build output from before GoFunction compiled them during synth
+# jsii build output (bun run build): compiled library, assembly, generated tsconfig,
+# jsii-pacmak packages, and the licence copied in for the npm package
+lib/
+.jsii
+.jsii.gz
+tsconfig.json
+*.tsbuildinfo
 dist/
+/LICENSE
 
-# test-data/ is deliberately NOT ignored: the htsget-rs sample fixtures are
-# vendored so DataShareTestStack synthesises straight from a fresh clone. See
-# test-data/README.md for provenance.
-
-# Deployment configuration and the VPC lookups CDK caches. Keep it outside this
-# repository; see cdk.context.example.json.
+# Deployment configuration for the development app and the VPC lookups CDK caches.
+# Keep it outside this repository; see cdk.context.example.json.
 cdk.context.json

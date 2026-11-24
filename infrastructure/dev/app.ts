@@ -1,14 +1,18 @@
 #!/usr/bin/env node
 import * as path from "path";
 import * as cdk from "aws-cdk-lib";
-import { DataReleaserStack } from "../lib/data-releaser-stack";
-import { DataShareTestStack } from "../lib/data-share-test-stack";
-import { DatasetConfig, hotCacheStacks, resolveBucketNameHashKey } from "../lib/hot-cache-stacks";
-import { MockMartObject, MockMartStack } from "../lib/mock-mart-stack";
-import { dataShareTestBucketName, TEST_DATA_OBJECTS } from "../lib/test-data";
+import { DataReleaserStack } from "../src/data-releaser-stack";
+import { DataShareTestStack } from "./data-share-test-stack";
+import { DatasetConfig, HotCacheStacks } from "../src/hot-cache-stacks";
+import { MockMartObject, MockMartStack } from "./mock-mart-stack";
+import { dataShareTestBucketName, TEST_DATA_OBJECTS } from "./test-data";
 
 /**
- * CDK app entrypoint for the Data Releaser stack.
+ * Development app for this repository, configured from cdk.context.json (see
+ * cdk.context.example.json). It also holds the demo-only stacks.
+ *
+ * Real deployments use the published `@umccr/data-releaser-cdk` package from their
+ * own CDK app instead; see README.md.
  */
 const app = new cdk.App();
 
@@ -68,24 +72,19 @@ new DataReleaserStack(app, "DataReleaserStack", {
   // also deploys the function recording a finished dataset copy.
   copyStateMachineArn: cfg.copyStateMachineArn,
   copyWorkingBucketName: cfg.copyWorkingBucketName,
-  description:
-    "Data Releaser Authorization Service resources in the Data Control account.",
 });
 
 // One bucket and one key per released dataset, each in a stack of its own so
 // that destroying one dataset's copy cannot reach another's.
 const datasets = cfg.datasets ?? [];
-hotCacheStacks(app, {
+HotCacheStacks.forDatasets(app, {
   env: { account, region },
   namePrefix,
   datasets,
   copyWriterRoleName: cfg.copyWriterRoleName,
   copyWriterRoleAccount: cfg.copyWriterRoleAccount,
   custodianRoleArn: cfg.custodianRoleArn,
-  bucketNameHashKey:
-    datasets.length > 0
-      ? resolveBucketNameHashKey(cfg.obscureBucketNames ?? false, process.env)
-      : undefined,
+  obscureBucketNames: cfg.obscureBucketNames,
   dataRetentionDays: cfg.dataRetentionDays,
   keyPendingWindowDays: cfg.keyPendingWindowDays,
   logObjectAccess: cfg.logObjectAccess,

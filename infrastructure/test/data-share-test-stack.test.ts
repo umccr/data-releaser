@@ -3,8 +3,8 @@ import * as os from "os";
 import * as path from "path";
 import * as cdk from "aws-cdk-lib";
 import { Template } from "aws-cdk-lib/assertions";
-import { DataShareTestStack } from "../lib/data-share-test-stack";
-import { dataShareTestBucketName, TEST_DATA_OBJECTS } from "../lib/test-data";
+import { DataShareTestStack } from "../dev/data-share-test-stack";
+import { dataShareTestBucketName, TEST_DATA_OBJECTS } from "../dev/test-data";
 
 const ACCOUNT = "000000000000";
 const REGION = "ap-southeast-2";

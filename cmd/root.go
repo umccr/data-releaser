@@ -16,9 +16,9 @@ var (
 
 var rootCmd = &cobra.Command{
 	Use:   "data-releaser",
-	Short: "Grant external researchers access to bioinformatics data, by either release mechanism",
-	Long: `Data Releaser grants external researchers access to bioinformatics data
-held by UMCCR, through one of two mechanisms that share these verbs and
+	Short: "Grant researchers access to bioinformatics data, by either release mechanism",
+	Long: `Data Releaser grants researchers access to bioinformatics data held by
+their organisation, through one of two mechanisms that share these verbs and
 nothing else.
 
 The htsget mechanism serves range requests for libraries through htsget-rs,

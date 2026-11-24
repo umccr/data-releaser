@@ -1,20 +1,73 @@
 {
-  "name": "data-releaser-infrastructure",
-  "version": "0.1.0",
-  "private": true,
-  "description": "AWS CDK app deploying the resources for the Data Releaser Authorization Service.",
+  "name": "@umccr/data-releaser-cdk",
+  "version": "0.0.0",
+  "description": "AWS CDK stacks for the Data Releaser authorization service and per-dataset hot cache buckets.",
+  "license": "MIT",
+  "author": {
+    "name": "University of Melbourne Centre for Cancer Research",
+    "url": "https://github.com/umccr",
+    "organization": true
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/umccr/data-releaser.git",
+    "directory": "infrastructure"
+  },
+  "homepage": "https://github.com/umccr/data-releaser#readme",
+  "keywords": [
+    "aws-cdk",
+    "awscdk",
+    "cdk",
+    "jsii",
+    "htsget",
+    "genomics",
+    "data-release"
+  ],
+  "stability": "experimental",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "files": [
+    "lib/**/*.js",
+    "lib/**/*.d.ts",
+    "assets",
+    ".jsii",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">= 20.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
-    "test": "bun test",
+    "build:lambdas": "bash scripts/build-lambdas.sh",
+    "build": "bun run build:lambdas && jsii && cp ../LICENSE LICENSE",
+    "test": "bun run build:lambdas && bun test",
+    "prepack": "bun run build",
     "synth": "cdk synth",
     "cdk": "cdk"
   },
-  "dependencies": {
-    "@aws-cdk/aws-lambda-go-alpha": "2.160.0-alpha.0",
-    "aws-cdk-lib": "2.275.0",
-    "constructs": "10.3.0"
+  "jsii": {
+    "outdir": "dist",
+    "targets": {},
+    "excludeTypescript": [
+      "dev",
+      "test"
+    ],
+    "tsc": {
+      "outDir": "lib",
+      "rootDir": "src"
+    }
+  },
+  "peerDependencies": {
+    "aws-cdk-lib": "^2.178.0",
+    "constructs": "^10.0.0"
   },
   "devDependencies": {
-    "@types/node": "20.14.9",
-    "aws-cdk": "2.1148.0"
+    "@types/node": "24.19.2",
+    "aws-cdk": "2.1149.0",
+    "aws-cdk-lib": "2.178.0",
+    "constructs": "10.0.0",
+    "jsii": "6.0.25"
   }
 }

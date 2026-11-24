@@ -5,7 +5,7 @@ import {
   HotCacheStack,
   HotCacheStackProps,
   hotCacheBucketName,
-} from "../lib/hot-cache-stack";
+} from "../src/hot-cache-stack";
 import {
   BUCKET_NAME_HASH_KEY_VAR,
   DatasetConfig,
@@ -13,7 +13,7 @@ import {
   hotCacheStackName,
   hotCacheStacks,
   resolveBucketNameHashKey,
-} from "../lib/hot-cache-stacks";
+} from "../src/hot-cache-stacks";
 
 const ACCOUNT = "000000000000";
 const REGION = "ap-southeast-2";

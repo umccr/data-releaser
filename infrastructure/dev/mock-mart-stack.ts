@@ -126,7 +126,7 @@ export class MockMartStack extends Stack {
         },
       },
     });
-    table.addDependency(database);
+    table.node.addDependency(database);
 
     const workgroup = new athena.CfnWorkGroup(this, "MockMartWorkgroup", {
       name: props.workgroupName,

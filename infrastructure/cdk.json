@@ -1,5 +1,5 @@
 {
-  "app": "bun bin/data-releaser.ts",
+  "app": "bun dev/app.ts",
   "watch": {
     "include": [
       "**"

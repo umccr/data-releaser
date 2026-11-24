@@ -1,6 +1,6 @@
 import * as cdk from "aws-cdk-lib";
 import { Template, Match } from "aws-cdk-lib/assertions";
-import { DataReleaserStack, stateMachineExecutionArns } from "../lib/data-releaser-stack";
+import { DataReleaserStack, stateMachineExecutionArns } from "../src/data-releaser-stack";
 
 const RESEARCHER_A = "111111111111";
 const RESEARCHER_B = "222222222222";

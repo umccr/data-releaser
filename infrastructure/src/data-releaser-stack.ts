@@ -1,3 +1,4 @@
+import * as fs from "fs";
 import * as path from "path";
 import {
   Arn,
@@ -16,39 +17,51 @@ import {
   aws_iam as iam,
   aws_ec2 as ec2,
 } from "aws-cdk-lib";
-import * as goLambda from "@aws-cdk/aws-lambda-go-alpha";
 import { Construct } from "constructs";
 
 export interface DataReleaserStackProps extends StackProps {
   /**
    * Prefix applied to physical resource names.
+   *
+   * @default "data-releaser"
    */
-  readonly namePrefix: string;
+  readonly namePrefix?: string;
 
   /**
    * API Gateway stage name.
+   *
+   * @default "prod"
    */
-  readonly stageName: string;
+  readonly stageName?: string;
 
   /**
    * Researcher AWS account IDs granted cross-account read on their own manifest prefix.
+   *
+   * @default []
    */
-  readonly researcherAccountIds: string[];
+  readonly researcherAccountIds?: string[];
 
   /**
-   * Ceiling on the `max-age` the authorization response may advertise.
+   * Ceiling on the `max-age` the authorization response may advertise, as a Go
+   * duration string.
+   *
+   * @default "1h"
    */
-  readonly cacheTtlCeiling: string;
+  readonly cacheTtlCeiling?: string;
 
   /**
    * Negative-cache max-age as a Go duration string.
+   *
+   * @default "60s"
    */
-  readonly cacheDenyTtl: string;
+  readonly cacheDenyTtl?: string;
 
   /**
    * When true, provision the operator IAM policy for running the CLI.
+   *
+   * @default false
    */
-  readonly provisionOperatorPolicy: boolean;
+  readonly provisionOperatorPolicy?: boolean;
 
   /**
    * VPC id hosting the `execute-api` interface endpoint through which the
@@ -113,6 +126,29 @@ export function stateMachineExecutionArns(stateMachineArn: string): string {
   });
 }
 
+/**
+ * Prefix applied to physical resource names when none is given.
+ */
+export const DEFAULT_NAME_PREFIX = "data-releaser";
+
+/**
+ * Prebuilt code for one of the Go Lambda functions under `functions/`.
+ *
+ * The package ships each function as a compiled `bootstrap` binary under
+ * `assets/<name>`, so deploying needs no Go toolchain. In a checkout,
+ * `bun run build:lambdas` produces them.
+ */
+function lambdaAsset(name: string): lambda.Code {
+  const dir = path.join(__dirname, "..", "assets", name);
+  if (!fs.existsSync(path.join(dir, "bootstrap"))) {
+    throw new Error(
+      `the ${name} Lambda has not been built: ${dir}/bootstrap is missing. ` +
+        "Run `bun run build:lambdas` in infrastructure/ first.",
+    );
+  }
+  return lambda.Code.fromAsset(dir);
+}
+
 const GSI1_NAME = "GSI1";
 const GSI2_NAME = "GSI2";
 const GSI3_NAME = "GSI3";
@@ -135,9 +171,19 @@ const DATASET_MANIFEST_PREFIX = "datasets";
  */
 export class DataReleaserStack extends Stack {
   constructor(scope: Construct, id: string, props: DataReleaserStackProps) {
-    super(scope, id, props);
+    super(scope, id, {
+      ...props,
+      description:
+        props.description ??
+        "Data Releaser Authorization Service resources in the Data Control account.",
+    });
 
-    const prefix = props.namePrefix;
+    const prefix = props.namePrefix ?? DEFAULT_NAME_PREFIX;
+    const stageName = props.stageName ?? "prod";
+    const researcherAccountIds = props.researcherAccountIds ?? [];
+    const cacheTtlCeiling = props.cacheTtlCeiling ?? "1h";
+    const cacheDenyTtl = props.cacheDenyTtl ?? "60s";
+    const provisionOperatorPolicy = props.provisionOperatorPolicy ?? false;
 
     const vpc = ec2.Vpc.fromLookup(this, "ApiVpc", { vpcId: props.apiVpcId });
 
@@ -163,7 +209,7 @@ export class DataReleaserStack extends Stack {
       tableName: `${prefix}-ShareRecords`,
       partitionKey: { name: "shareId", type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-      pointInTimeRecovery: true,
+      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
       removalPolicy: RemovalPolicy.RETAIN,
     });
 
@@ -197,11 +243,6 @@ export class DataReleaserStack extends Stack {
     const gsi2Arn = `${table.tableArn}/index/${GSI2_NAME}`;
     const gsi3Arn = `${table.tableArn}/index/${GSI3_NAME}`;
 
-    const goModuleDir = path.join(__dirname, "..", "..", "go.mod");
-    const goBundling: goLambda.BundlingOptions = {
-      goBuildFlags: ['-trimpath -ldflags "-s -w"'],
-    };
-
     // Authorization callout role: read-only.
     const authRole = new iam.Role(this, "AuthorizationFunctionRole", {
       roleName: `${prefix}-authorization-role`,
@@ -221,21 +262,20 @@ export class DataReleaserStack extends Stack {
       }),
     );
 
-    const authFn = new goLambda.GoFunction(this, "AuthorizationFunction", {
+    const authFn = new lambda.Function(this, "AuthorizationFunction", {
       functionName: `${prefix}-authorization`,
       runtime: lambda.Runtime.PROVIDED_AL2023,
       architecture: lambda.Architecture.ARM_64,
-      entry: path.join(__dirname, "..", "..", "functions", "authorization"),
-      moduleDir: goModuleDir,
-      bundling: goBundling,
+      handler: "bootstrap",
+      code: lambdaAsset("authorization"),
       role: authRole,
       memorySize: 128,
       timeout: Duration.seconds(10),
       ...lambdaVpcConfig,
       environment: {
         SHARE_RECORDS_TABLE_NAME: table.tableName,
-        CACHE_TTL_CEILING: props.cacheTtlCeiling,
-        CACHE_DENY_TTL: props.cacheDenyTtl,
+        CACHE_TTL_CEILING: cacheTtlCeiling,
+        CACHE_DENY_TTL: cacheDenyTtl,
       },
     });
 
@@ -270,13 +310,12 @@ export class DataReleaserStack extends Stack {
       }),
     );
 
-    const adminFn = new goLambda.GoFunction(this, "AdminFunction", {
+    const adminFn = new lambda.Function(this, "AdminFunction", {
       functionName: `${prefix}-admin`,
       runtime: lambda.Runtime.PROVIDED_AL2023,
       architecture: lambda.Architecture.ARM_64,
-      entry: path.join(__dirname, "..", "..", "functions", "admin"),
-      moduleDir: goModuleDir,
-      bundling: goBundling,
+      handler: "bootstrap",
+      code: lambdaAsset("admin"),
       role: adminRole,
       memorySize: 128,
       timeout: Duration.seconds(10),
@@ -354,13 +393,12 @@ export class DataReleaserStack extends Stack {
         }),
       );
 
-      const copyCompletionFn = new goLambda.GoFunction(this, "CopyCompletionFunction", {
+      const copyCompletionFn = new lambda.Function(this, "CopyCompletionFunction", {
         functionName: `${prefix}-copy-completion`,
         runtime: lambda.Runtime.PROVIDED_AL2023,
         architecture: lambda.Architecture.ARM_64,
-        entry: path.join(__dirname, "..", "..", "functions", "copycompletion"),
-        moduleDir: goModuleDir,
-        bundling: goBundling,
+        handler: "bootstrap",
+        code: lambdaAsset("copycompletion"),
         role: copyCompletionRole,
         // Larger than the other two functions because the summary carries a row
         // per object and is totalled in one pass, so a dataset of many objects
@@ -442,7 +480,7 @@ export class DataReleaserStack extends Stack {
       restApiName: `${prefix}-authorization-api`,
       description: "Authorization Service REST API (callout + admin).",
       deployOptions: {
-        stageName: props.stageName,
+        stageName,
       },
       endpointConfiguration: {
         types: [apigw.EndpointType.PRIVATE],
@@ -490,7 +528,7 @@ export class DataReleaserStack extends Stack {
     // is scoped to its own prefix under both, so the widest this reaches is an
     // account learning that it has no manifest of one kind, which it already
     // knows.
-    for (const accountId of props.researcherAccountIds) {
+    for (const accountId of researcherAccountIds) {
       manifestBucket.addToResourcePolicy(
         new iam.PolicyStatement({
           sid: `ResearcherRead${accountId}`,
@@ -508,7 +546,7 @@ export class DataReleaserStack extends Stack {
     }
 
     // Operator policy
-    if (props.provisionOperatorPolicy) {
+    if (provisionOperatorPolicy) {
       const operatorPolicy = new iam.ManagedPolicy(this, "OperatorPolicy", {
         managedPolicyName: `${prefix}-operator`,
         description:
@@ -544,13 +582,13 @@ export class DataReleaserStack extends Stack {
             sid: "ReadApiStage",
             actions: ["apigateway:GET"],
             resources: [
-              `arn:aws:apigateway:${this.region}::/restapis/${api.restApiId}/stages/${props.stageName}`,
+              `arn:aws:apigateway:${this.region}::/restapis/${api.restApiId}/stages/${stageName}`,
             ],
           }),
           new iam.PolicyStatement({
             sid: "InvokeAdminApi",
             actions: ["execute-api:Invoke"],
-            resources: [api.arnForExecuteApi("*", "/admin/*", props.stageName)],
+            resources: [api.arnForExecuteApi("*", "/admin/*", stageName)],
           }),
           new iam.PolicyStatement({
             sid: "LatticeAndRam",
@@ -584,7 +622,7 @@ export class DataReleaserStack extends Stack {
       exportName: `${prefix}-apiGatewayRestApiId`,
     });
     new CfnOutput(this, "ApiGatewayStageName", {
-      value: props.stageName,
+      value: stageName,
       description: "CLI config: endpoints.apiGatewayStageName",
       exportName: `${prefix}-apiGatewayStageName`,
     });

@@ -32,9 +32,9 @@ This account hosts the authorization service, htsget-rs, VPC Lattice, the
 OrcaVault Lake Formation resource link, the manifest bucket, and one cache bucket
 and key per dataset released as direct S3 access.
 
-### Deployed by this repo (`infrastructure/` CDK app)
+### Deployed by this repo's CDK stacks (`@umccr/data-releaser-cdk`)
 
-These are created when you `cdk deploy` the stacks in `infrastructure/` (see
+These are created when you `cdk deploy` the stacks from your deployment app (see
 [`docs/deployment.md`](deployment.md)). They are prerequisites for the CLI, not
 for the stack itself.
 
