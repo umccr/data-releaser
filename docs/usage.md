@@ -1,17 +1,28 @@
 # CLI usage
 
-This document covers how to build and run the `data-releaser` CLI: every
+This document covers how to install and run the `data-releaser` CLI: every
 subcommand, its flags, worked invocation examples with representative output,
 and the exit-code convention.
 
-## Building and running
+## Installing and running
+
+Download the archive for your platform from the
+[releases page](https://github.com/umccr/data-releaser/releases), or install with
+Go. Use the release matching the version of `@umccr/data-releaser-cdk` the
+deployment was made with.
+
+```sh
+go install github.com/umccr/data-releaser@vX.Y.Z
+
+data-releaser --version
+data-releaser --help
+```
+
+To build from a checkout instead:
 
 ```sh
 # From the repository root — build a single binary
 go build -o data-releaser .
-
-# Run it
-./data-releaser --help
 ```
 
 > `go build ./...` works. The CDK app's `infrastructure/node_modules/` carries

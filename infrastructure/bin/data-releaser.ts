@@ -8,7 +8,11 @@ import { MockMartObject, MockMartStack } from "../lib/mock-mart-stack";
 import { dataShareTestBucketName, TEST_DATA_OBJECTS } from "../lib/test-data";
 
 /**
- * CDK app entrypoint for the Data Releaser stack.
+ * Development app for this repository, configured from cdk.context.json (see
+ * cdk.context.example.json). It also holds the demo-only stacks.
+ *
+ * Real deployments use the published `@umccr/data-releaser-cdk` package from their
+ * own CDK app instead; see README.md.
  */
 const app = new cdk.App();
 
@@ -68,8 +72,6 @@ new DataReleaserStack(app, "DataReleaserStack", {
   // also deploys the function recording a finished dataset copy.
   copyStateMachineArn: cfg.copyStateMachineArn,
   copyWorkingBucketName: cfg.copyWorkingBucketName,
-  description:
-    "Data Releaser Authorization Service resources in the Data Control account.",
 });
 
 // One bucket and one key per released dataset, each in a stack of its own so

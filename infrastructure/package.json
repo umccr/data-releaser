@@ -1,20 +1,39 @@
 {
-  "name": "data-releaser-infrastructure",
-  "version": "0.1.0",
-  "private": true,
-  "description": "AWS CDK app deploying the resources for the Data Releaser Authorization Service.",
+  "name": "@umccr/data-releaser-cdk",
+  "version": "0.0.0",
+  "description": "AWS CDK stacks for the Data Releaser authorization service and per-dataset hot cache buckets.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/umccr/data-releaser.git",
+    "directory": "infrastructure"
+  },
+  "homepage": "https://github.com/umccr/data-releaser#readme",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
-    "test": "bun test",
+    "build:lambdas": "bash scripts/build-lambdas.sh",
+    "build": "bun run build:lambdas && rm -rf dist && tsc -p tsconfig.build.json && cp -R assets dist/assets && cp ../LICENSE dist/LICENSE",
+    "test": "bun run build:lambdas && bun test",
+    "prepack": "bun run build",
     "synth": "cdk synth",
     "cdk": "cdk"
   },
-  "dependencies": {
-    "@aws-cdk/aws-lambda-go-alpha": "2.160.0-alpha.0",
-    "aws-cdk-lib": "2.275.0",
-    "constructs": "10.3.0"
+  "peerDependencies": {
+    "aws-cdk-lib": "^2.278.0",
+    "constructs": "^10.5.0"
   },
   "devDependencies": {
-    "@types/node": "20.14.9",
-    "aws-cdk": "2.1148.0"
+    "@types/node": "24.19.2",
+    "aws-cdk": "2.1149.0",
+    "aws-cdk-lib": "2.278.0",
+    "constructs": "10.8.1",
+    "typescript": "7.0.2"
   }
 }

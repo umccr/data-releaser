@@ -67,7 +67,7 @@ This repository holds three deliverables in one place:
 | `main.go`, `cmd/`, `internal/` | The `data-releaser` Go CLI and its logic |
 | `functions/authorization`, `functions/admin` | Go AWS Lambda entrypoints for the authorization service (callout + admin) |
 | `functions/copycompletion` | Go AWS Lambda that records a finished dataset copy, moving it from `copying` to `staged` or `failed` |
-| `infrastructure/` | AWS CDK (TypeScript) app that deploys the Data Control account resources this project owns |
+| `infrastructure/` | AWS CDK (TypeScript) stacks that deploy the Data Control account resources this project owns, published to npm as [`@umccr/data-releaser-cdk`](infrastructure/README.md) |
 
 ## Account topology
 
@@ -130,11 +130,23 @@ Each `.drawio.svg` embeds its own source: open it in [draw.io](https://www.drawi
 For caching semantics and the other behaviour an administrator has to plan
 around, see [`docs/operations.md`](docs/operations.md).
 
+## Install
+
+Each release publishes the CLI and the CDK stacks together, with one version:
+
+- **CLI:** download an archive for your platform from the
+  [releases page](https://github.com/umccr/data-releaser/releases), or
+  `go install github.com/umccr/data-releaser@latest` (or `@vX.Y.Z`).
+- **CDK stacks:** `npm install @umccr/data-releaser-cdk`, used from a CDK app of
+  your own that holds your deployment's configuration. See
+  [`docs/deployment.md`](docs/deployment.md).
+
+Use the same version of both: the CLI and the stacks share the ledger schema,
+the manifest prefixes and the bucket naming.
+
 ## Quick start
 
 ```sh
-# Build the CLI
-go build -o data-releaser .
 
 # Provide a config file: copy config.example.yaml to config.yaml and fill it in
 # (see docs/configuration.md for every field). It is searched for at
@@ -142,29 +154,30 @@ go build -o data-releaser .
 
 # Confirm the infrastructure is healthy before sharing. Bare, this checks both
 # mechanisms; name one to narrow it to that mechanism's checks.
-./data-releaser validate
+data-releaser validate
 
 # htsget: share two libraries with a researcher account for 30 days
-./data-releaser share htsget --libraries L2400001,L2400002 \
+data-releaser share htsget --libraries L2400001,L2400002 \
   --account 777788889999 --expiry 30d
 
 # s3: copy a dataset in, then grant one researcher read access from one VPC.
 # Staging returns as soon as the copy has been started; nothing can be granted
 # until it reports and the copy moves to staged.
-./data-releaser stage s3 --dataset-uri s3://source-bucket/datasets/cohort-a/
-./data-releaser share s3 --dataset-uri s3://source-bucket/datasets/cohort-a/ \
+data-releaser stage s3 --dataset-uri s3://source-bucket/datasets/cohort-a/
+data-releaser share s3 --dataset-uri s3://source-bucket/datasets/cohort-a/ \
   --account 777788889999 --target-vpc-id vpc-0123456789abcdef0 --expiry 30d
 
 # See both mechanisms' records, whatever state they are in
-./data-releaser list
+data-releaser list
 ```
 
-The mechanism is part of every invocation. `./data-releaser share --libraries …`
+The mechanism is part of every invocation. `data-releaser share --libraries …`
 exits non-zero and names the forms that exist rather than guessing.
 
-> `go build ./...` builds the whole module. The CDK app's
-> `infrastructure/node_modules/` carries `.go` files that are not part of it, and
-> `go.mod` excludes them with an `ignore` directive.
+To build from a checkout instead, run `go build -o data-releaser .`.
+`go build ./...` builds the whole module; `infrastructure/node_modules/` carries
+`.go` files that are not part of it, and `go.mod` excludes them with an `ignore`
+directive.
 
 ## Documentation
 
@@ -172,7 +185,7 @@ exits non-zero and names the forms that exist rather than guessing.
 | --- | --- |
 | [`docs/usage.md`](docs/usage.md) | How to run each command, with flags, worked examples, and the exit-code convention |
 | [`docs/configuration.md`](docs/configuration.md) | Every config field, defaults, flag precedence, config search paths, annotated example |
-| [`docs/deployment.md`](docs/deployment.md) | How to deploy the CDK stacks, and how their outputs map to config |
+| [`docs/deployment.md`](docs/deployment.md) | How to deploy the CDK stacks from a CDK app of your own, and how their outputs map to config |
 | [`docs/prerequisites.md`](docs/prerequisites.md) | The per-account prerequisite checklist — what each account must have, who owns it, and how to verify it (largely via `validate`) |
 | [`docs/onboarding.md`](docs/onboarding.md) | The end-to-end procedure for onboarding a researcher account across the data plane (RAM/VPC Lattice) and manifest plane, ending in a `validate` check |
 | [`docs/operations.md`](docs/operations.md) | Operational characteristics an administrator must understand: cache-bounded htsget revocation, immutable library sets, idempotent creation, ~1-day warehouse lag, and the drift the s3 mechanism can develop |

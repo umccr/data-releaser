@@ -1,7 +1,9 @@
-# Data Releaser — infrastructure (CDK)
+# @umccr/data-releaser-cdk
 
-AWS CDK **TypeScript** application that deploys, into the account this tool runs
-against, every AWS resource the two release mechanisms need:
+AWS CDK stacks that deploy, into the Data Control account, every AWS resource the
+[data releaser](https://github.com/umccr/data-releaser)'s two release mechanisms
+need. Use them from a CDK app of your own; each version of this package is
+released together with the `data-releaser` CLI of the same version.
 
 | Resource                         | Notes                                                                                                                                                                                                                                            |
 |----------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
@@ -22,99 +24,77 @@ htsget VPC Lattice constructs this system depends on — are CDK TypeScript.
 The stack provisions **nothing** outside the Data Control account: no
 researcher-side resources, no Lake Formation / RAM sharing, no htsget-rs.
 
-The app also holds one **hot cache stack per dataset** released as direct S3
-access — see [per-dataset hot cache stacks](#per-dataset-hot-cache-stacks). Those
-are separate stacks, deployed by name; `DataReleaserStack` does not depend on
-them and they do not depend on it.
+Each dataset released as direct S3 access gets a **hot cache stack** of its own —
+see [per-dataset hot cache stacks](#per-dataset-hot-cache-stacks). Those are
+separate stacks, deployed by name; `DataReleaserStack` does not depend on them and
+they do not depend on it.
 
-## Parameters
+## Usage
 
-Everything that varies between environments is a **parameter**, so nothing is
-hardcoded and one source tree deploys to a dev and a prod account
-with no code change. Every parameter lives under the `dataReleaser` key of
-`cdk.context.json`; edit that file to retarget a deployment.
-No `-c` flags are read, and `cdk.json` carries only CDK feature flags.
+```bash
+npm install @umccr/data-releaser-cdk aws-cdk-lib constructs
+```
 
-Start from the example with `cp cdk.context.example.json cdk.context.json`. The
-real file is gitignored, because it holds your account IDs, VPC and the subnets
-CDK looks up. Keep it with the rest of your deployment configuration, for example
-in a private repository, and copy or link it here before running CDK.
+```ts
+import * as cdk from "aws-cdk-lib";
+import { DataReleaserStack, hotCacheStacks } from "@umccr/data-releaser-cdk";
 
-`cdk.context.json` rather than `cdk.json` or `-c` for two reasons. `-c` can only
-carry strings — `cdk`'s help calls it a "contextual *string* parameter", so
-`-c provisionOperatorPolicy=false` arrives as the string `"false"`, which is
-truthy; every boolean, number and list would need a coercion layer whose bugs
-silently deploy the opposite of what was asked. And `cdk.json` context takes
-precedence over `cdk.context.json` for the same key, so the block must live in
-exactly one of them or the wrong one silently wins.
+const app = new cdk.App();
+const env = { account: "999988887777", region: "ap-southeast-2" };
 
-> ⚠️ `cdk context --clear` / `--reset` rewrite the whole file and **delete the
-> hand-authored `dataReleaser` block** along with the lookup cache. Restore it
-> from your saved copy of the file, or remove just the `vpc-provider:` entry by
-> hand instead.
+new DataReleaserStack(app, "DataReleaserStack", {
+  env,
+  apiVpcId: "vpc-0345678901bcdef02",
+  researcherAccountIds: ["111111111111", "222222222222"],
+});
 
-| Context key               | Meaning                                                                                                               | Default                                     |
+hotCacheStacks(app, {
+  env,
+  copyWriterRoleName: "steps-s3-copy-writer-role",
+  datasets: [{ name: "cohort-a", datasetUri: "s3://source-bucket/datasets/cohort-a/" }],
+});
+```
+
+```bash
+npx cdk deploy DataReleaserStack
+```
+
+Pin this package to the version of the `data-releaser` CLI you run against the
+deployment. Deploying needs Node.js or Bun and the CDK CLI, but no Go toolchain or
+Docker: the Lambda functions ship prebuilt. The
+[deployment guide](https://github.com/umccr/data-releaser/blob/main/docs/deployment.md)
+walks through a complete deployment app.
+
+| `DataReleaserStack` prop  | Meaning                                                                                                               | Default                                     |
 |---------------------------|-----------------------------------------------------------------------------------------------------------------------|---------------------------------------------|
-| `account`                 | Target AWS account                                                                                                    | `CDK_DEFAULT_ACCOUNT`, else placeholder     |
-| `region`                  | Target region                                                                                                         | `CDK_DEFAULT_REGION`, else `ap-southeast-2` |
+| `env`                     | Target account and region. **Required** in practice, because the VPC lookup needs both                                | —                                           |
+| `apiVpcId`                | VPC hosting the API's interface endpoint and every Lambda; must be the VPC the htsget-rs Lambda runs in. **Required** | —                                           |
 | `namePrefix`              | Physical-name prefix                                                                                                  | `data-releaser`                             |
 | `stageName`               | REST API stage name                                                                                                   | `prod`                                      |
-| `researcherAccountIds`    | Accounts granted manifest read (JSON array of account IDs)                                                             | `[]`                                        |
+| `researcherAccountIds`    | Accounts granted manifest read                                                                                         | `[]`                                        |
 | `cacheTtlCeiling`         | Cache TTL ceiling (Go duration)                                                                                       | `1h`                                        |
 | `cacheDenyTtl`            | Negative-cache max-age (Go duration)                                                                                  | `60s`                                       |
 | `provisionOperatorPolicy` | Provision the managed policy an operator assumes to run the CLI                                                       | `false`                                     |
-| `apiVpcId`                | VPC hosting the API's interface endpoint and every Lambda; must be the VPC the htsget-rs Lambda runs in. **Required** | `vpc-0345678901bcdef02`                     |
 | `copyStateMachineArn`     | State machine performing dataset copies; set it to deploy the copy completion Lambda and its rule                      | unset — neither is deployed                 |
 | `copyWorkingBucketName`   | Bucket the copy orchestration works in, holding its summary of each run. **Required alongside `copyStateMachineArn`**   | —                                           |
 
-Example — deploy to production Data Control, granting two researcher accounts
-read on their own manifest prefix:
+## Lambda binaries
 
-```jsonc
-// cdk.context.json
-{
-  "dataReleaser": {
-    "account": "999988887777",
-    "region": "ap-southeast-2",
-    "apiVpcId": "vpc-0345678901bcdef02",
-    "researcherAccountIds": ["111111111111", "222222222222"]
-  }
-}
-```
+Every Lambda is a **Go** binary on the `provided.al2023` custom runtime, targeting
+**arm64/Graviton**, built from `functions/<name>` in the repository. The package
+ships them as `dist/assets/<name>/bootstrap`, the name the custom runtime requires.
+
+In a checkout, `bun run build:lambdas` builds them into `assets/` (Go required).
+Per function it runs:
 
 ```bash
-pnpm install
-cdk deploy
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
+  go build -trimpath -buildvcs=false -tags lambda.norpc -ldflags "-s -w" \
+  -o assets/<fn>/bootstrap ./functions/<fn>
 ```
 
-## Go Lambda bundling
-
-Every Lambda in this app is a **Go** binary on the `provided.al2023` custom runtime,
-targeting **arm64/Graviton**. `GoFunction` from `@aws-cdk/aws-lambda-go-alpha`
-compiles them as part of `cdk synth`, so there is no separate build step and nothing
-to rebuild by hand. It emits the executable as `bootstrap`, which the custom runtime
-requires.
-
-Per function this is equivalent to:
-
-```bash
-GOOS=linux GOARCH=arm64 CGO_ENABLED=0 \
-  go build -trimpath -ldflags="-s -w" -o bootstrap ./functions/<fn>
-```
-
-`GOOS`, `GOARCH` (from the function's `architecture`), and `CGO_ENABLED=0` are the
-construct's own defaults; `-trimpath -ldflags "-s -w"` comes from
-`bundling.goBuildFlags`. `moduleDir` points at the repo-root `go.mod`, since the Go
-module spans the whole repo rather than `infrastructure/`.
-
-Bundling uses the local Go toolchain when one is on `PATH` and falls back to a
-Docker container otherwise, so Go **or** Docker is enough. The asset hash is
-derived from the compiled binary, so editing a Go source file invalidates the
-asset and triggers a rebuild on the next synth.
-
-> `@aws-cdk/aws-lambda-go-alpha` is an **alpha** CDK module: its API is outside
-> semver and may change or be removed in a future release. It is pinned to
-> `2.160.0-alpha.0`, matching `aws-cdk-lib`, and both must be bumped together.
+The binaries carry no VCS stamp, so with the same Go version an unchanged function
+builds to an identical asset and is not redeployed.
 
 ## Copy completion
 
@@ -124,14 +104,12 @@ delivers that to `functions/copycompletion`, and the release the copy was stagin
 becomes staged — grantable — or failed, which grants nothing and refuses to be
 released.
 
-```jsonc
-// cdk.context.json
-{
-  "dataReleaser": {
-    "copyStateMachineArn": "arn:aws:states:ap-southeast-2:999988887777:stateMachine:steps-s3-copy",
-    "copyWorkingBucketName": "steps-s3-copy-working"
-  }
-}
+```ts
+new DataReleaserStack(app, "DataReleaserStack", {
+  // ...
+  copyStateMachineArn: "arn:aws:states:ap-southeast-2:999988887777:stateMachine:steps-s3-copy",
+  copyWorkingBucketName: "steps-s3-copy-working",
+});
 ```
 
 Set neither and neither resource is deployed, which is what a deployment releasing
@@ -171,45 +149,39 @@ it.
 A dataset released as plain S3 access lives in a bucket of its own, encrypted with
 a KMS key used by nothing else. One `HotCache-<name>` stack owns that pair, so
 scheduling deletion of one dataset's key destroys that dataset's copy and reaches
-no other. `HotCacheStack` in [`lib/hot-cache-stack.ts`](lib/hot-cache-stack.ts) is
-the stack; [`lib/hot-cache-stacks.ts`](lib/hot-cache-stacks.ts) turns the
-configured list of datasets into instances of it.
+no other. `HotCacheStack` is the stack, and `hotCacheStacks` turns the configured
+list of datasets into instances of it.
 
 Grants are **not** deployed here. The CLI writes the researcher's access into the
 bucket and key policies when a release is made and rewrites both documents whole
 on every change, so this stack establishes only the baseline they are built on.
 The copy orchestration, the source object store, and everything in a researcher
-account are consumed, not deployed: none of them appear in this app.
+account are consumed, not deployed: none of them appear in these stacks.
 
 Each dataset is one entry in the `datasets` array:
 
-```jsonc
-// cdk.context.json
-{
-  "dataReleaser": {
-    "copyWriterRoleName": "steps-s3-copy-writer-role",
-    "custodianRoleArn": "arn:aws:iam::999988887777:role/dataset-custodian",
-    "datasets": [
-      {
-        "name": "cohort-a",
-        "datasetUri": "urn:fdc:example.org:2025:dataset/cohort-a"
-      }
-    ]
-  }
-}
+```ts
+hotCacheStacks(app, {
+  env,
+  copyWriterRoleName: "steps-s3-copy-writer-role",
+  custodianRoleArn: "arn:aws:iam::999988887777:role/dataset-custodian",
+  datasets: [{ name: "cohort-a", datasetUri: "urn:fdc:example.org:2025:dataset/cohort-a" }],
+});
 ```
 
 ```bash
 cdk deploy HotCache-cohort-a
 ```
 
-| Context key             | Meaning                                                                                   | Default             |
+| `hotCacheStacks` option | Meaning                                                                                   | Default             |
 |-------------------------|-------------------------------------------------------------------------------------------|---------------------|
-| `datasets`              | Datasets to deploy, as `{ name, datasetUri, bucketName?, dataRetentionDays? }` objects     | `[]`                |
+| `env`                   | Account and region every dataset stack is deployed to                                      | —                   |
+| `datasets`              | Datasets to deploy, as `{ name, datasetUri, bucketName?, dataRetentionDays? }` objects     | —                   |
+| `namePrefix`            | Physical-name prefix; must match `DataReleaserStack` and the CLI                           | `data-releaser`     |
 | `copyWriterRoleName`    | Role the copy orchestration writes through; each dataset key policy grants it. **Required once a dataset is configured** | —  |
 | `copyWriterRoleAccount` | Account owning that role, when the copy orchestration runs elsewhere                       | this account        |
 | `custodianRoleArn`      | Principal allowed to disable a dataset key and schedule its deletion                       | key admins only     |
-| `obscureBucketNames`    | Derive bucket names with a keyed hash instead of a legible slug                             | `false`             |
+| `bucketNameHashKey`     | Secret that derives bucket names with a keyed hash instead of a legible slug                | unset — legible     |
 | `dataRetentionDays`     | Storage-cost backstop, in days; must be ≥ 90 and well beyond any release expiry            | `365`               |
 | `keyPendingWindowDays`  | Days a dataset key stays recoverable after deletion is scheduled                            | `7`                 |
 | `logObjectAccess`       | Record object reads via S3 server access logging                                            | `true`              |
@@ -226,12 +198,12 @@ Two things about names are worth care, because both end in a **new empty bucket
 beside a full one that nothing refers to** — the buckets and keys are retained on
 delete, so a rename orphans rather than destroys:
 
-- `obscureBucketNames` requires the hash key in the `HOT_CACHE_BUCKET_NAME_HASH_KEY`
-  environment variable, and synth fails without it rather than falling back to a
-  legible name. The variable, not context, because `cdk.context.json` is normally
-  kept in version control and a key kept there obscures nothing. The same value
-  must be present on every synth.
-- Flipping `obscureBucketNames`, changing the hash key, or editing a `datasetUri`
+- To obscure names, pass `bucketNameHashKey: resolveBucketNameHashKey(true, process.env)`.
+  It reads the key from the `HOT_CACHE_BUCKET_NAME_HASH_KEY` environment variable
+  and fails without it rather than falling back to a legible name. The variable,
+  not the app, because a deployment app is normally kept in version control and a
+  key kept there obscures nothing. The same value must be present on every synth.
+- Starting or stopping obscuring, changing the hash key, or editing a `datasetUri`
   all rename the bucket. Once a bucket holds a copy someone is reading, pin its
   name with the dataset's `bucketName` and the derivation stops mattering.
 
@@ -250,12 +222,20 @@ toolchain plus deployment-grade credentials on the same path that grants a
 researcher access, and standing up a bucket and a key would become a side effect
 of a release command.
 
-One consequence for the other stacks: with datasets configured the app holds more
+One consequence for the other stacks: with datasets configured an app holds more
 than one stack, so a bare `cdk deploy` no longer resolves. Name what you mean —
 `cdk deploy DataReleaserStack`, `cdk deploy HotCache-<name>`, or
 `cdk deploy 'HotCache-*'`.
 
-## Optional: mock test-data bucket (`DataShareTestStack`)
+## Development app and demo stacks
+
+This repository's own CDK app, `bin/data-releaser.ts`, is for developing the
+stacks. It reads its configuration from the `dataReleaser` key of a gitignored
+`cdk.context.json` (start from `cdk.context.example.json`), and it also holds two
+demo-only stacks that are not part of the package. Real deployments use the
+package from an app of their own, as above.
+
+### Optional: mock test-data bucket (`DataShareTestStack`)
 
 In the real system the shareable reads live in a Data Account bucket outside this
 repo. For the mock/demo set-up there is no such account, so an **optional** stack
@@ -289,7 +269,7 @@ derived `s3:GetObject` grant to this account.
 |-----------------|--------------------------------------|---------|
 | `dataShareTest` | Deploy the mock test-data bucket     | `false` |
 
-## Optional: mock OrcaVault Mart (`MockMartStack`)
+### Optional: mock OrcaVault Mart (`MockMartStack`)
 
 A second, **optional** stack stands in for the OrcaVault Mart so the CLI can be
 demoed or exercised end-to-end without warehouse access. It is not part of the
@@ -399,10 +379,10 @@ interface endpoint, and every bucket blocks all public access. Making anything
 public again requires editing the stack — a reviewable code change, not a
 context value.
 
-The VPC lookup is resolved against the real account **once** and cached in
-`cdk.context.json`, beside the `dataReleaser` configuration block,
-so `cdk synth` works with no credentials. Only a lookup for a new
-account/region/VPC needs credentials to populate the cache.
+The VPC lookup is resolved against the real account **once** and cached in the
+deployment app's `cdk.context.json`, so later synths work with no credentials.
+Commit that file with the app. Only a lookup for a new account/region/VPC needs
+credentials to populate the cache.
 
 ## Stack outputs → CLI config
 
@@ -414,13 +394,15 @@ account/region/VPC needs credentials to populate the cache.
 | `AuthorizationCalloutUrl` | `endpoints.authorization` |
 | `AuthorizationApiVpcEndpointId` | — (the only route to the API) |
 
-## Commands
+## Development
 
 ```bash
-pnpm install            # install CDK dependencies (respects the lockfile)
-pnpm run build          # tsc typecheck/compile
-pnpm test               # CDK assertion tests over the synthesised template
-pnpm exec cdk synth     # synthesise; no flags, and no AWS credentials needed
-                        # when dataReleaser.account/region in cdk.context.json
-                        # match the VPC lookup cached in the same file
+bun install             # install dependencies (respects the lockfile)
+bun run test            # build the Lambda binaries, then run the CDK assertion tests
+bun run build           # build the package into dist/: Lambda binaries, JS, type declarations
+bunx cdk synth          # synthesise the development app from cdk.context.json
 ```
+
+Releases are automated: release-please tags `vX.Y.Z` on `main`, and the release
+workflow publishes this package to npm and the CLI to the GitHub release from the
+same tag.

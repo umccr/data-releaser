@@ -1,4 +1,6 @@
-import { App, Environment } from "aws-cdk-lib";
+import { Environment } from "aws-cdk-lib";
+import { Construct } from "constructs";
+import { DEFAULT_NAME_PREFIX } from "./data-releaser-stack";
 import { HotCacheStack } from "./hot-cache-stack";
 
 /**
@@ -11,8 +13,8 @@ const STACK_NAME = /^[A-Za-z][A-Za-z0-9-]*$/;
 /**
  * Environment variable carrying the secret that keys bucket-name derivation.
  *
- * Not a context value: the context file is checked in, and a checked-in key
- * obscures nothing.
+ * Not a configuration value: configuration is normally kept in version control,
+ * and a key kept there obscures nothing.
  */
 export const BUCKET_NAME_HASH_KEY_VAR = "HOT_CACHE_BUCKET_NAME_HASH_KEY";
 
@@ -89,9 +91,12 @@ export interface HotCacheStacksOptions {
   readonly env: Environment;
 
   /**
-   * Prefix applied to physical resource names.
+   * Prefix applied to physical resource names. Must match the `namePrefix` of
+   * the `DataReleaserStack` and the CLI's `s3.hotCache.namePrefix`.
+   *
+   * @default "data-releaser"
    */
-  readonly namePrefix: string;
+  readonly namePrefix?: string;
 
   /**
    * Name of the role the copy orchestration writes through. Required as soon as
@@ -159,7 +164,7 @@ export function hotCacheStackName(datasetName: string): string {
  * the path that grants access, and creating a bucket and key is not something a
  * release command should be able to do as a side effect.
  */
-export function hotCacheStacks(app: App, opts: HotCacheStacksOptions): HotCacheStack[] {
+export function hotCacheStacks(scope: Construct, opts: HotCacheStacksOptions): HotCacheStack[] {
   if (opts.datasets.length === 0) {
     return [];
   }
@@ -200,9 +205,9 @@ export function hotCacheStacks(app: App, opts: HotCacheStacksOptions): HotCacheS
     names.add(dataset.name);
     uris.add(dataset.datasetUri);
 
-    return new HotCacheStack(app, hotCacheStackName(dataset.name), {
+    return new HotCacheStack(scope, hotCacheStackName(dataset.name), {
       env: opts.env,
-      namePrefix: opts.namePrefix,
+      namePrefix: opts.namePrefix ?? DEFAULT_NAME_PREFIX,
       datasetUri: dataset.datasetUri,
       copyWriterRoleName,
       copyWriterRoleAccount: opts.copyWriterRoleAccount,
