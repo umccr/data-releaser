@@ -1,6 +1,6 @@
 {
   "name": "@umccr/data-releaser-cdk",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "AWS CDK stacks for the Data Releaser authorization service and per-dataset hot cache buckets.",
   "license": "MIT",
   "author": {

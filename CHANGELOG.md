@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/umccr/data-releaser/compare/v0.1.0...v0.1.1) (2026-11-24)
+
+
+### Miscellaneous Chores
+
+* release 0.1.1 ([d5714fd](https://github.com/umccr/data-releaser/commit/d5714fd00c1a20fd33bb3d3fe75c650d62eefaa9))
+
 ## 0.1.0 (2026-11-24)
 
 
