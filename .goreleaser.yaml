@@ -1,0 +1,39 @@
+# Builds the data-releaser CLI for each release and attaches the archives to the
+# GitHub release that release-please created. See .github/workflows/release.yml.
+version: 2
+
+project_name: data-releaser
+
+builds:
+  - id: data-releaser
+    main: .
+    binary: data-releaser
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X github.com/umccr/data-releaser/cmd.version={{ .Version }}
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  disable: true
+
+release:
+  # release-please writes the release notes; only add the archives.
+  mode: keep-existing
