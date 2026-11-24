@@ -111,6 +111,12 @@ type SubmitRequest struct {
 	// the copy service when empty.
 	Objects []SourceObject
 
+	// InstructionsDocument is a fully-formed JSONL instruction document to use as-is.
+	// When set, Objects is ignored and instruction-building is bypassed entirely. The
+	// document is validated (each line must be a parseable CopyInstruction) and then
+	// uploaded verbatim to the working bucket.
+	InstructionsDocument []byte
+
 	// DryRun prices and checks the transfer without performing it. No copy is recorded,
 	// because nothing has been staged.
 	DryRun bool
@@ -182,11 +188,12 @@ func (s *Submitter) Submit(ctx context.Context, req SubmitRequest) (*Submission,
 	}
 
 	plan, err := PlanCopy(s.cfg, CopyRequest{
-		RunID:             runID,
-		DatasetURI:        req.DatasetURI,
-		DestinationBucket: req.DestinationBucket,
-		Objects:           req.Objects,
-		DryRun:            req.DryRun,
+		RunID:                runID,
+		DatasetURI:           req.DatasetURI,
+		DestinationBucket:    req.DestinationBucket,
+		Objects:              req.Objects,
+		InstructionsDocument: req.InstructionsDocument,
+		DryRun:               req.DryRun,
 	})
 	if err != nil {
 		return nil, err
