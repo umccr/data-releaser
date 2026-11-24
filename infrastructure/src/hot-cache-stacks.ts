@@ -116,9 +116,15 @@ export interface HotCacheStacksOptions {
   readonly custodianRoleArn?: string;
 
   /**
-   * Secret keying the derivation of bucket names from dataset URIs.
+   * Derive bucket names with a keyed hash instead of a legible slug.
+   *
+   * The key is read from the `HOT_CACHE_BUCKET_NAME_HASH_KEY` environment variable,
+   * never from configuration, and synth fails without it rather than falling back
+   * to a legible name. The same key must be present on every synth.
+   *
+   * @default false
    */
-  readonly bucketNameHashKey?: string;
+  readonly obscureBucketNames?: boolean;
 
   /**
    * Days after which objects expire, as a storage-cost backstop only.
@@ -144,7 +150,7 @@ export interface HotCacheStacksOptions {
   /**
    * The datasets to deploy. An empty list deploys none.
    */
-  readonly datasets: readonly DatasetConfig[];
+  readonly datasets: DatasetConfig[];
 }
 
 /**
@@ -178,6 +184,7 @@ export function hotCacheStacks(scope: Construct, opts: HotCacheStacksOptions): H
     );
   }
 
+  const bucketNameHashKey = resolveBucketNameHashKey(opts.obscureBucketNames ?? false, process.env);
   const names = new Set<string>();
   const uris = new Set<string>();
 
@@ -213,7 +220,7 @@ export function hotCacheStacks(scope: Construct, opts: HotCacheStacksOptions): H
       copyWriterRoleAccount: opts.copyWriterRoleAccount,
       custodianRoleArn: opts.custodianRoleArn,
       bucketName: dataset.bucketName,
-      bucketNameHashKey: opts.bucketNameHashKey,
+      bucketNameHashKey,
       dataRetentionDays: dataset.dataRetentionDays ?? opts.dataRetentionDays,
       keyPendingWindowDays: opts.keyPendingWindowDays,
       logObjectAccess: opts.logObjectAccess,
@@ -223,4 +230,29 @@ export function hotCacheStacks(scope: Construct, opts: HotCacheStacksOptions): H
       description: `Hot cache bucket and key holding one dataset's released copy (${dataset.name}).`,
     });
   });
+}
+
+/**
+ * Creates the hot cache stacks for a list of datasets.
+ */
+export class HotCacheStacks {
+  /**
+   * One `HotCacheStack` per dataset, each named `HotCache-<name>` and created
+   * directly in `scope`, which should be the app or a stage.
+   *
+   * Validates the whole list first: dataset names must be usable as stack names,
+   * and neither a name nor a dataset URI may appear twice.
+   */
+  public static forDatasets(scope: Construct, options: HotCacheStacksOptions): HotCacheStack[] {
+    return hotCacheStacks(scope, options);
+  }
+
+  /**
+   * The stack ID and name a dataset's stack is given.
+   */
+  public static stackName(datasetName: string): string {
+    return hotCacheStackName(datasetName);
+  }
+
+  private constructor() {}
 }

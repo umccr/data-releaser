@@ -41,7 +41,7 @@ my-data-releaser-deployment/
 ```ts
 // bin/app.ts
 import * as cdk from "aws-cdk-lib";
-import { DataReleaserStack, hotCacheStacks } from "@umccr/data-releaser-cdk";
+import { DataReleaserStack, HotCacheStacks } from "@umccr/data-releaser-cdk";
 
 const app = new cdk.App();
 const env = { account: "999988887777", region: "ap-southeast-2" };
@@ -52,21 +52,23 @@ new DataReleaserStack(app, "DataReleaserStack", {
   researcherAccountIds: ["111111111111", "222222222222"],
 });
 
-hotCacheStacks(app, {
+HotCacheStacks.forDatasets(app, {
   env,
   copyWriterRoleName: "steps-s3-copy-role",
   datasets: [{ name: "cohort-a", datasetUri: "s3://source-bucket/datasets/cohort-a/" }],
 });
 ```
 
-Pin `@umccr/data-releaser-cdk` to the same version as the `data-releaser` CLI
-you run against it: both are released together from one tag, and they share
+The package supports `aws-cdk-lib` 2.178.0 or later and `constructs` 10, as peer
+dependencies, so your app chooses its own CDK version within those ranges. Pin
+`@umccr/data-releaser-cdk` to the same version as the `data-releaser` CLI you run
+against it: both are released together from one tag, and they share
 the ledger schema, the manifest prefixes and the bucket naming. Use the feature
 flags from [`infrastructure/cdk.json`](../infrastructure/cdk.json) in your
 `cdk.json`, which are the ones the stacks are tested with.
 
 Keep the stack IDs (`DataReleaserStack`, and the `HotCache-<name>` IDs
-`hotCacheStacks` derives) stable once deployed. A different ID is a different
+`HotCacheStacks.forDatasets` derives) stable once deployed. A different ID is a different
 CloudFormation stack, which would try to create a second copy of every named
 resource beside the first.
 
@@ -146,11 +148,11 @@ cannot discover where the data is.
 A dataset released as direct S3 access gets a bucket of its own and a KMS key
 used by nothing else, in a `HotCache-<name>` stack of its own — so scheduling
 deletion of one dataset's key destroys that dataset's copy and can reach no
-other. `hotCacheStacks` turns each entry in `datasets` into one such stack,
+other. `HotCacheStacks.forDatasets` turns each entry in `datasets` into one such stack,
 deployed by name.
 
 ```ts
-hotCacheStacks(app, {
+HotCacheStacks.forDatasets(app, {
   env,
   copyWriterRoleName: "steps-s3-copy-role",
   datasets: [{ name: "cohort-a", datasetUri: "s3://source-bucket/datasets/cohort-a/" }],
@@ -165,7 +167,7 @@ hotCacheStacks(app, {
 | `copyWriterRoleName` | Role the copy orchestration writes through; each dataset key policy grants it. **Required once a dataset is configured** | — |
 | `copyWriterRoleAccount` | Account owning that role, when the copy orchestration runs elsewhere | this account |
 | `custodianRoleArn` | Principal permitted to disable a dataset key and schedule its deletion | key administrators only |
-| `bucketNameHashKey` | Secret that derives bucket names with a keyed hash instead of a legible slug | unset — legible names |
+| `obscureBucketNames` | Derive bucket names with a keyed hash instead of a legible slug | `false` |
 | `dataRetentionDays` | Storage-cost backstop, in days; must be at least 90 | `365` |
 | `keyPendingWindowDays` | Days a dataset key stays recoverable after deletion is scheduled | `7` |
 | `logObjectAccess` | Record object reads via S3 server access logging | `true` |
@@ -178,12 +180,11 @@ URI derive one bucket name and contend for it.
 
 Bucket names deserve care, because the buckets and keys are retained on delete:
 a rename does not move a copy, it abandons it and stands an empty bucket up
-beside it. To obscure bucket names, pass
-`bucketNameHashKey: resolveBucketNameHashKey(true, process.env)`, which reads the
-key from the `HOT_CACHE_BUCKET_NAME_HASH_KEY` environment variable and fails
-rather than falling back to a legible name. Keep the key out of the app itself:
-a deployment app is normally kept in version control, and a key kept there
-obscures nothing. The CLI derives the same name from the same inputs, so its
+beside it. `obscureBucketNames` reads the hash key from the
+`HOT_CACHE_BUCKET_NAME_HASH_KEY` environment variable and fails without it,
+rather than falling back to a legible name. The key is never configuration,
+because a deployment app is normally kept in version control and a key kept
+there obscures nothing. The CLI derives the same name from the same inputs, so its
 `s3.hotCache` settings and this variable have to agree with the deployment's; see
 [`docs/configuration.md`](configuration.md). Once a bucket holds a copy someone
 is reading, pin its name with the dataset's `bucketName` and the derivation

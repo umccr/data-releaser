@@ -4,9 +4,18 @@ cdk.out/
 # Node
 node_modules/
 
-# Compiled Lambda binaries (bun run build:lambdas) and the built package (bun run build)
+# Compiled Lambda binaries (bun run build:lambdas)
 assets/
+
+# jsii build output (bun run build): compiled library, assembly, generated tsconfig,
+# jsii-pacmak packages, and the licence copied in for the npm package
+lib/
+.jsii
+.jsii.gz
+tsconfig.json
+*.tsbuildinfo
 dist/
+/LICENSE
 
 # Deployment configuration for the development app and the VPC lookups CDK caches.
 # Keep it outside this repository; see cdk.context.example.json.

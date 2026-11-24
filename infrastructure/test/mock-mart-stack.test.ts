@@ -1,6 +1,6 @@
 import * as cdk from "aws-cdk-lib";
 import { Template, Match } from "aws-cdk-lib/assertions";
-import { MockMartObject, MockMartStack } from "../lib/mock-mart-stack";
+import { MockMartObject, MockMartStack } from "../dev/mock-mart-stack";
 
 const DEFAULT_OBJECTS: MockMartObject[] = [
   { libraryId: "L2400001", key: "demo/L2400001/NA12878.bam" },

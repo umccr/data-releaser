@@ -138,7 +138,7 @@ export const DEFAULT_NAME_PREFIX = "data-releaser";
  * `assets/<name>`, so deploying needs no Go toolchain. In a checkout,
  * `bun run build:lambdas` produces them.
  */
-export function lambdaAsset(name: string): lambda.Code {
+function lambdaAsset(name: string): lambda.Code {
   const dir = path.join(__dirname, "..", "assets", name);
   if (!fs.existsSync(path.join(dir, "bootstrap"))) {
     throw new Error(

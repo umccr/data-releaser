@@ -3,37 +3,71 @@
   "version": "0.0.0",
   "description": "AWS CDK stacks for the Data Releaser authorization service and per-dataset hot cache buckets.",
   "license": "MIT",
+  "author": {
+    "name": "University of Melbourne Centre for Cancer Research",
+    "url": "https://github.com/umccr",
+    "organization": true
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/umccr/data-releaser.git",
     "directory": "infrastructure"
   },
   "homepage": "https://github.com/umccr/data-releaser#readme",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
-  "files": [
-    "dist"
+  "keywords": [
+    "aws-cdk",
+    "awscdk",
+    "cdk",
+    "jsii",
+    "htsget",
+    "genomics",
+    "data-release"
   ],
+  "stability": "experimental",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "files": [
+    "lib/**/*.js",
+    "lib/**/*.d.ts",
+    "assets",
+    ".jsii",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">= 20.0.0"
+  },
   "publishConfig": {
     "access": "public"
   },
   "scripts": {
     "build:lambdas": "bash scripts/build-lambdas.sh",
-    "build": "bun run build:lambdas && rm -rf dist && tsc -p tsconfig.build.json && cp -R assets dist/assets && cp ../LICENSE dist/LICENSE",
+    "build": "bun run build:lambdas && jsii && cp ../LICENSE LICENSE",
     "test": "bun run build:lambdas && bun test",
     "prepack": "bun run build",
     "synth": "cdk synth",
     "cdk": "cdk"
   },
+  "jsii": {
+    "outdir": "dist",
+    "targets": {},
+    "excludeTypescript": [
+      "dev",
+      "test"
+    ],
+    "tsc": {
+      "outDir": "lib",
+      "rootDir": "src"
+    }
+  },
   "peerDependencies": {
-    "aws-cdk-lib": "^2.278.0",
-    "constructs": "^10.5.0"
+    "aws-cdk-lib": "^2.178.0",
+    "constructs": "^10.0.0"
   },
   "devDependencies": {
     "@types/node": "24.19.2",
     "aws-cdk": "2.1149.0",
-    "aws-cdk-lib": "2.278.0",
-    "constructs": "10.8.1",
-    "typescript": "7.0.2"
+    "aws-cdk-lib": "2.178.0",
+    "constructs": "10.0.0",
+    "jsii": "6.0.25"
   }
 }

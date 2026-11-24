@@ -37,7 +37,7 @@ npm install @umccr/data-releaser-cdk aws-cdk-lib constructs
 
 ```ts
 import * as cdk from "aws-cdk-lib";
-import { DataReleaserStack, hotCacheStacks } from "@umccr/data-releaser-cdk";
+import { DataReleaserStack, HotCacheStacks } from "@umccr/data-releaser-cdk";
 
 const app = new cdk.App();
 const env = { account: "999988887777", region: "ap-southeast-2" };
@@ -48,7 +48,7 @@ new DataReleaserStack(app, "DataReleaserStack", {
   researcherAccountIds: ["111111111111", "222222222222"],
 });
 
-hotCacheStacks(app, {
+HotCacheStacks.forDatasets(app, {
   env,
   copyWriterRoleName: "steps-s3-copy-writer-role",
   datasets: [{ name: "cohort-a", datasetUri: "s3://source-bucket/datasets/cohort-a/" }],
@@ -60,7 +60,7 @@ npx cdk deploy DataReleaserStack
 ```
 
 Pin this package to the version of the `data-releaser` CLI you run against the
-deployment. Deploying needs Node.js or Bun and the CDK CLI, but no Go toolchain or
+deployment; see [compatibility](#compatibility) for the CDK versions it supports. Deploying needs Node.js or Bun and the CDK CLI, but no Go toolchain or
 Docker: the Lambda functions ship prebuilt. The
 [deployment guide](https://github.com/umccr/data-releaser/blob/main/docs/deployment.md)
 walks through a complete deployment app.
@@ -78,11 +78,31 @@ walks through a complete deployment app.
 | `copyStateMachineArn`     | State machine performing dataset copies; set it to deploy the copy completion Lambda and its rule                      | unset — neither is deployed                 |
 | `copyWorkingBucketName`   | Bucket the copy orchestration works in, holding its summary of each run. **Required alongside `copyStateMachineArn`**   | —                                           |
 
+## Compatibility
+
+| | Supported |
+| --- | --- |
+| `aws-cdk-lib` | 2.178.0 or later (peer dependency `^2.178.0`) |
+| `constructs` | 10 (peer dependency `^10.0.0`) |
+| Node.js | 20 or later |
+
+The package's dev dependencies pin `aws-cdk-lib` and `constructs` to those minimums,
+so the build and tests run against the oldest supported releases and any use of a
+newer API fails CI rather than quietly raising the minimum. A second CI job runs
+the same tests against the latest releases.
+
+The package is built with [jsii](https://aws.github.io/jsii/), and its `.jsii`
+assembly is published with it, which lets [Construct Hub](https://constructs.dev)
+list it. The public API is the jsii-compatible subset: `DataReleaserStack`,
+`HotCacheStack`, `HotCacheStacks` and their props. Packages for other jsii
+languages (Python, Java, .NET, Go) are not published yet; that needs a `targets`
+entry in the `jsii` section of `package.json` and an account on each registry.
+
 ## Lambda binaries
 
 Every Lambda is a **Go** binary on the `provided.al2023` custom runtime, targeting
 **arm64/Graviton**, built from `functions/<name>` in the repository. The package
-ships them as `dist/assets/<name>/bootstrap`, the name the custom runtime requires.
+ships them as `assets/<name>/bootstrap`, the name the custom runtime requires.
 
 In a checkout, `bun run build:lambdas` builds them into `assets/` (Go required).
 Per function it runs:
@@ -149,8 +169,8 @@ it.
 A dataset released as plain S3 access lives in a bucket of its own, encrypted with
 a KMS key used by nothing else. One `HotCache-<name>` stack owns that pair, so
 scheduling deletion of one dataset's key destroys that dataset's copy and reaches
-no other. `HotCacheStack` is the stack, and `hotCacheStacks` turns the configured
-list of datasets into instances of it.
+no other. `HotCacheStack` is the stack, and `HotCacheStacks.forDatasets` turns the
+configured list of datasets into instances of it.
 
 Grants are **not** deployed here. The CLI writes the researcher's access into the
 bucket and key policies when a release is made and rewrites both documents whole
@@ -161,7 +181,7 @@ account are consumed, not deployed: none of them appear in these stacks.
 Each dataset is one entry in the `datasets` array:
 
 ```ts
-hotCacheStacks(app, {
+HotCacheStacks.forDatasets(app, {
   env,
   copyWriterRoleName: "steps-s3-copy-writer-role",
   custodianRoleArn: "arn:aws:iam::999988887777:role/dataset-custodian",
@@ -173,7 +193,7 @@ hotCacheStacks(app, {
 cdk deploy HotCache-cohort-a
 ```
 
-| `hotCacheStacks` option | Meaning                                                                                   | Default             |
+| `HotCacheStacks` option | Meaning                                                                                   | Default             |
 |-------------------------|-------------------------------------------------------------------------------------------|---------------------|
 | `env`                   | Account and region every dataset stack is deployed to                                      | —                   |
 | `datasets`              | Datasets to deploy, as `{ name, datasetUri, bucketName?, dataRetentionDays? }` objects     | —                   |
@@ -181,7 +201,7 @@ cdk deploy HotCache-cohort-a
 | `copyWriterRoleName`    | Role the copy orchestration writes through; each dataset key policy grants it. **Required once a dataset is configured** | —  |
 | `copyWriterRoleAccount` | Account owning that role, when the copy orchestration runs elsewhere                       | this account        |
 | `custodianRoleArn`      | Principal allowed to disable a dataset key and schedule its deletion                       | key admins only     |
-| `bucketNameHashKey`     | Secret that derives bucket names with a keyed hash instead of a legible slug                | unset — legible     |
+| `obscureBucketNames`    | Derive bucket names with a keyed hash instead of a legible slug                             | `false`             |
 | `dataRetentionDays`     | Storage-cost backstop, in days; must be ≥ 90 and well beyond any release expiry            | `365`               |
 | `keyPendingWindowDays`  | Days a dataset key stays recoverable after deletion is scheduled                            | `7`                 |
 | `logObjectAccess`       | Record object reads via S3 server access logging                                            | `true`              |
@@ -198,9 +218,9 @@ Two things about names are worth care, because both end in a **new empty bucket
 beside a full one that nothing refers to** — the buckets and keys are retained on
 delete, so a rename orphans rather than destroys:
 
-- To obscure names, pass `bucketNameHashKey: resolveBucketNameHashKey(true, process.env)`.
-  It reads the key from the `HOT_CACHE_BUCKET_NAME_HASH_KEY` environment variable
-  and fails without it rather than falling back to a legible name. The variable,
+- `obscureBucketNames` reads the key from the `HOT_CACHE_BUCKET_NAME_HASH_KEY`
+  environment variable and fails without it rather than falling back to a legible
+  name. The variable,
   not the app, because a deployment app is normally kept in version control and a
   key kept there obscures nothing. The same value must be present on every synth.
 - Starting or stopping obscuring, changing the hash key, or editing a `datasetUri`
@@ -229,7 +249,7 @@ than one stack, so a bare `cdk deploy` no longer resolves. Name what you mean �
 
 ## Development app and demo stacks
 
-This repository's own CDK app, `bin/data-releaser.ts`, is for developing the
+This repository's own CDK app, `dev/app.ts`, is for developing the
 stacks. It reads its configuration from the `dataReleaser` key of a gitignored
 `cdk.context.json` (start from `cdk.context.example.json`), and it also holds two
 demo-only stacks that are not part of the package. Real deployments use the
@@ -399,7 +419,7 @@ credentials to populate the cache.
 ```bash
 bun install             # install dependencies (respects the lockfile)
 bun run test            # build the Lambda binaries, then run the CDK assertion tests
-bun run build           # build the package into dist/: Lambda binaries, JS, type declarations
+bun run build           # build the package: Lambda binaries, then jsii compiles src/ into lib/
 bunx cdk synth          # synthesise the development app from cdk.context.json
 ```
 
