@@ -184,7 +184,9 @@ function slugify(datasetUri: string): string {
     .replace(/^[a-zA-Z0-9+.-]+:\/\//, "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
+    // The line above leaves at most one dash at each end, so trimming one is enough.
+    // A quantified pattern such as /-+$/ backtracks quadratically on long dash runs.
+    .replace(/^-|-$/g, "");
 }
 
 /**
